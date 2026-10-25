@@ -21,9 +21,9 @@ const mammothBrowserAdapter = {
 const modules = new Map([
   ["docx", import("docx")],
   ["xlsx-js-style", import("xlsx-js-style")],
-  ["pptxgenjs", import("pptxgenjs")],
   ["pdf-lib", import("pdf-lib")],
   ["jszip", import("jszip")],
+  ["pptxgenjs", import("pptxgenjs")],
   ["mammoth", Promise.resolve({ default: mammothBrowserAdapter })],
   ["jspdf", import("jspdf")],
   ["jspdf-autotable", import("jspdf-autotable")],
@@ -89,23 +89,35 @@ await feature("F2", "XLSX nyata dapat dibuka dan berisi tabel sesuai skema", asy
   assert.equal(workbook.Sheets.Anggaran.B3.f, "SUM(B2:B2)");
 });
 
-await feature("F3", "PPTX nyata dapat dibuka dengan tepat dua slide", async () => {
+await feature("F3", "PPTX modern-gold dua slide valid untuk impor manual ke Canva", async () => {
   const generated = await exportAssistantDocument({
     title: "Strategi Produk",
-    content: "# Strategi Produk",
+    content: "# Strategi Produk\n\nRencana validasi dan pertumbuhan produk.",
     structuredSlides: [
       { slide_number: 1, title: "Konteks", content: ["Pasar berkembang", "Peluang terukur"], notes: "Catatan pembicara" },
       { slide_number: 2, title: "Kesimpulan", content: ["Mulai dari uji coba"], notes: "" },
     ],
-    theme: "clean-light",
-  }, "pptx", { download: false, libraryLoader, requestedSlideCount: 2 });
+    requestedSlideCount: 2,
+    theme: "modern-gold",
+  }, "pptx", { download: false, libraryLoader });
   const zip = await readZip(generated.blob);
-  const slides = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
-  assert.equal(slides.length, 2);
-  const slideText = await Promise.all(slides.map((name) => zip.file(name).async("string")));
-  assert.ok(slideText.join("\n").includes("Konteks"));
-  assert.ok(slideText.join("\n").includes("Mulai dari uji coba"));
-  assert.equal(Object.keys(zip.files).some((name) => /vbaProject|\.bin$/i.test(name)), false);
+  const slideFiles = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+  assert.equal(slideFiles.length, 2);
+  assert.ok(zip.file("[Content_Types].xml"));
+  assert.ok(zip.file("ppt/presentation.xml"));
+  const slideContents = await Promise.all(slideFiles.map((name) => zip.file(name).async("string")));
+  assert.ok(slideContents.some((xml) => xml.includes("Konteks")));
+  assert.ok(slideContents.some((xml) => xml.includes("Kesimpulan")));
+  assert.ok(slideContents.some((xml) => /C28A32/i.test(xml)));
+  const singleSlide = await exportAssistantDocument({
+    title: "Rencana Singkat",
+    content: "# Rencana Singkat\n\nRangkuman tujuan.",
+    structuredSlides: [{ slide_number: 1, title: "Tujuan", content: ["Menguji gagasan"], notes: "" }],
+    requestedSlideCount: 2,
+    theme: "modern-gold",
+  }, "pptx", { download: false, libraryLoader });
+  const singleSlideZip = await readZip(singleSlide.blob);
+  assert.equal(Object.keys(singleSlideZip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).length, 2);
 });
 
 await feature("F4", "gambar valid dari fixture lokal (MOCK; tanpa panggilan provider)", async () => {
@@ -151,7 +163,7 @@ await feature("F6", "PDF diperkecil dan tetap valid setelah dibuka ulang", async
   console.log(`INFO F6 ${result.sourceSize} B -> ${result.outputSize} B.`);
 });
 
-await feature("F7", "Word ke PDF dan Excel ke PowerPoint menghasilkan format yang dapat dibuka", async () => {
+await feature("F7", "Word ke PDF dan Excel menghasilkan outline untuk Canva Connect", async () => {
   const word = await engine.execute("word_to_pdf", [new File([generatedDocx.blob], "source.docx", {
     type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   })]);
@@ -164,11 +176,9 @@ await feature("F7", "Word ke PDF dan Excel ke PowerPoint menghasilkan format yan
   const presentation = await engine.execute("excel_to_ppt", [new File([xlsx], "source.xlsx", {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   })]);
-  const zip = await readZip(presentation.file);
-  const slides = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
-  assert.ok(slides.length > 0);
-  const slideXml = await Promise.all(slides.map((name) => zip.file(name).async("string")));
-  assert.ok(slideXml.join("\n").includes("Kursi"));
+  assert.equal(presentation.presentationOutline.title, "source");
+  assert.equal(presentation.presentationOutline.slides.length, 1);
+  assert.match(presentation.presentationOutline.slides[0].content.join("\n"), /Produk: Kursi/);
   await assert.rejects(engine.execute("pdf_to_odt", [new File(["x"], "unsupported.pdf", { type: "application/pdf" })]), /tidak didukung/);
 });
 
