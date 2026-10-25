@@ -5220,18 +5220,6 @@ dialog:not(.voice-chat-dialog):not(.html-preview-dialog):not(.file-preview-dialo
 }
 
 @media (max-width: 800px) {
-  .topbar {
-    min-height: 56px;
-    padding-top: max(5px, env(safe-area-inset-top));
-    padding-bottom: 5px;
-  }
-
-  .chat-wrap.empty .welcome {
-    transform: translateY(24px);
-  }
-}
-
-@media (max-width: 800px) {
   .composer {
     margin-bottom: max(8px, env(safe-area-inset-bottom));
   }
