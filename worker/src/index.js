@@ -26,7 +26,13 @@ const GUEST_MAX_IMAGE_CHARS = 1_500_000;
 const GUEST_TRIAL_LIMIT = 2;
 const MONID_API_BASE = "https://api.monid.ai/v1";
 const EXPLORIUM_API_BASE = "https://api.explorium.ai";
-const GEMINI_IMAGE_CATALOG_TTL_MS = 5 * 60 * 1000;
+const GEMINI_IMAGE_MODELS = [
+  "gemini-3.1-flash-image",
+  "gemini-3.1-flash-lite-image",
+  "gemini-2.5-flash-image",
+];
+const GEMINI_IMAGE_MAX_RATE_LIMIT_RETRIES = 2;
+const GEMINI_IMAGE_CIRCUIT_BREAKER_MS = 60_000;
 const UPSTREAM_CONNECT_TIMEOUT_MS = 30_000;
 const UPSTREAM_IDLE_TIMEOUT_MS = 30_000;
 const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
@@ -59,8 +65,8 @@ let cachedJwksExpiry = 0;
 let importedKeys = new Map();
 let cachedOpenRouterModels = null;
 let cachedOpenRouterModelsExpiry = 0;
-let cachedGeminiImageModels = null;
-let cachedGeminiImageModelsExpiry = 0;
+let geminiImageConsecutiveFailures = 0;
+let geminiImageCircuitOpenUntil = 0;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -139,7 +145,7 @@ export function isImageEditRequest(prompt) {
 
 function corsHeaders(request = null) {
   const origin = request?.headers?.get("Origin") || "";
-  const allowedOrigin = origin && CORS_ALLOWED_ORIGINS.has(origin) ? origin : "";
+  const allowedOrigin = origin && isAllowedOrigin(origin) ? origin : "";
   return {
     ...(allowedOrigin ? { "Access-Control-Allow-Origin": allowedOrigin } : {}),
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -174,9 +180,12 @@ export function isAllowedOrigin(origin, env = {}) {
     if (url.protocol === "capacitor:") {
       return url.hostname === "localhost" && !url.port;
     }
-    if (url.protocol === "https:" && url.hostname.endsWith(".pages.dev")) return true;
-    return ["http:", "https:"].includes(url.protocol)
-      && ["localhost", "127.0.0.1"].includes(url.hostname);
+    if (url.protocol === "https:"
+      && (url.hostname === "myai-v3-firmansyah.pages.dev"
+        || url.hostname.endsWith(".myai-v3-firmansyah.pages.dev"))) return true;
+    return url.protocol === "http:"
+      && ["localhost", "127.0.0.1"].includes(url.hostname)
+      && (!url.port || ["4173", "5173"].includes(url.port));
   } catch {
     return false;
   }
@@ -1385,7 +1394,9 @@ async function enhanceImagePromptPlan(prompt, keys, request) {
   const cleanedPrompt = cleanImageGenerationPrompt(prompt);
   const fallback = buildFallbackImagePromptPlan(cleanedPrompt);
   if (!keys.groq) {
-    return { ...fallback, enhanced: false, enhancer: "local", enhancerModel: "deterministic-fallback" };
+    const reason = "Penyempurna AI Groq belum dikonfigurasi; prompt lokal digunakan.";
+    console.warn("Image prompt enhancement unavailable:", { provider: "groq", reason: "missing-key" });
+    return { ...fallback, enhanced: false, enhancer: "local", enhancerModel: "deterministic-fallback", reason };
   }
 
   const systemPrompt = `You create text-to-image prompts. Return one JSON object only with exactly these fields: {"prompt":"...","negative":"...","aspect":"16:9|1:1|9:16","style":"...","assumptions":"..."}.
@@ -1430,11 +1441,25 @@ Use only 16:9, 1:1, or 9:16. Keep prompt under 2,400 characters and negative und
       });
     } catch (error) {
       if (request.signal?.aborted) throw error;
-      return { ...fallback, enhanced: false, enhancer: "local", enhancerModel: "deterministic-fallback" };
+      const reason = error?.name === "TimeoutError"
+        ? "Penyempurna AI Groq melewati batas waktu; prompt lokal digunakan."
+        : "Penyempurna AI Groq tidak dapat dijangkau; prompt lokal digunakan.";
+      console.warn("Image prompt enhancement unavailable:", {
+        provider: "groq",
+        model: "openai/gpt-oss-20b",
+        errorName: error?.name || "Error",
+      });
+      return { ...fallback, enhanced: false, enhancer: "local", enhancerModel: "deterministic-fallback", reason };
     }
     if (!response.ok) {
       try { await response.body?.cancel(); } catch {}
-      return { ...fallback, enhanced: false, enhancer: "local", enhancerModel: "deterministic-fallback" };
+      const reason = `Penyempurna AI Groq menolak permintaan (HTTP ${response.status}); prompt lokal digunakan.`;
+      console.warn("Image prompt enhancement rejected:", {
+        provider: "groq",
+        model: "openai/gpt-oss-20b",
+        httpStatus: response.status,
+      });
+      return { ...fallback, enhanced: false, enhancer: "local", enhancerModel: "deterministic-fallback", reason };
     }
 
     const result = await response.json().catch(() => null);
@@ -1459,7 +1484,12 @@ Use only 16:9, 1:1, or 9:16. Keep prompt under 2,400 characters and negative und
       repairNote = "The previous JSON was invalid or omitted the required visual subject. Return a corrected schema-valid object that preserves the requiredVisualAnchor.";
     }
   }
-  return { ...fallback, enhanced: false, enhancer: "local", enhancerModel: "deterministic-fallback" };
+  const reason = "Respons penyempurna AI tidak lolos validasi setelah satu perbaikan; prompt lokal digunakan.";
+  console.warn("Image prompt enhancement returned invalid JSON after repair:", {
+    provider: "groq",
+    model: "openai/gpt-oss-20b",
+  });
+  return { ...fallback, enhanced: false, enhancer: "local", enhancerModel: "deterministic-fallback", reason };
 }
 
 async function enhancePrompt(request, keys) {
@@ -1599,7 +1629,21 @@ async function generateImage(request, env, user) {
   const providerPrompt = plan.negative ? `${basePrompt}. Avoid: ${plan.negative}.` : basePrompt;
   const generated = await requestGeminiImage(providerPrompt, aspectRatio, key, 90000);
   if (!generated.image) {
-    if (generated.response) return sendProviderError(generated.response, "Gemini Image", key);
+    if (generated.response?.status === 401 || generated.response?.status === 403) {
+      throw new HttpError(502, "Autentikasi Gemini Image ditolak atau key tidak memiliki izin. Mencoba provider gambar cadangan.");
+    }
+    if (generated.response?.status === 402 || generated.response?.status === 429) {
+      throw new HttpError(429, "Kuota atau batas permintaan Gemini Image tercapai. Mencoba provider gambar cadangan.");
+    }
+    if (generated.response?.status === 404) {
+      throw new HttpError(503, "Model Gemini Image yang tersedia tidak ditemukan. Mencoba provider gambar cadangan.");
+    }
+    if (generated.response?.status >= 500) {
+      throw new HttpError(502, "Gemini Image sedang mengalami gangguan. Mencoba provider gambar cadangan.");
+    }
+    if (generated.response) {
+      throw new HttpError(502, "Gemini Image menolak permintaan. Periksa prompt atau coba provider gambar cadangan.");
+    }
     const reason = generated.payload?.promptFeedback?.blockReason;
     throw new HttpError(422, reason
       ? `Permintaan gambar ditolak oleh kebijakan Gemini (${reason}).`
@@ -1622,6 +1666,9 @@ async function generateImage(request, env, user) {
     style: plan.style,
     assumptions: plan.assumptions,
     enhanced: body.plan?.enhanced === true || enhancerResult?.enhanced === true,
+    enhancer: body.plan?.enhancer === "groq" ? "groq" : "local",
+    enhancerModel: typeof body.plan?.enhancerModel === "string" ? body.plan.enhancerModel : "deterministic-fallback",
+    ...(!body.plan?.enhanced && typeof body.plan?.reason === "string" ? { enhancementReason: body.plan.reason } : {}),
   });
 }
 
@@ -1758,37 +1805,124 @@ function failedHealthResult(status, startedAt, extra = {}) {
   };
 }
 
+async function geminiImageErrorDiagnostics(response) {
+  const payload = await response.clone().json().catch(() => null);
+  const error = payload?.error || {};
+  const details = Array.isArray(error.details) ? error.details : [];
+  const quotaViolation = details
+    .filter((detail) => detail?.["@type"]?.endsWith(".QuotaFailure"))
+    .flatMap((detail) => Array.isArray(detail.violations) ? detail.violations : [])[0];
+  const retryInfo = details.find((detail) => detail?.["@type"]?.endsWith(".RetryInfo"));
+  const limit = quotaViolation?.quotaValue ?? quotaViolation?.limit ?? null;
+  const retryDelay = retryInfo?.retryDelay || response.headers.get("Retry-After") || null;
+  return {
+    httpStatus: response.status,
+    providerStatus: typeof error.status === "string" ? error.status : null,
+    quotaMetric: typeof quotaViolation?.quotaMetric === "string" ? quotaViolation.quotaMetric : null,
+    limit: limit === null ? null : String(limit),
+    retryDelay: retryDelay === null ? null : String(retryDelay),
+  };
+}
+
+function retryDelayMilliseconds(retryDelay) {
+  if (!retryDelay) return null;
+  const seconds = String(retryDelay).match(/^(\d+(?:\.\d+)?)s$/);
+  if (seconds) return Math.ceil(Number(seconds[1]) * 1000);
+  if (/^\d+(?:\.\d+)?$/.test(String(retryDelay))) return Math.ceil(Number(retryDelay) * 1000);
+  const date = Date.parse(String(retryDelay));
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+function logGeminiImageFailure(model, diagnostics) {
+  console.warn("Gemini Image provider request failed:", {
+    model,
+    ...diagnostics,
+  });
+}
+
+function recordGeminiImageFailure() {
+  geminiImageConsecutiveFailures += 1;
+  if (geminiImageConsecutiveFailures >= 3) {
+    geminiImageCircuitOpenUntil = Date.now() + GEMINI_IMAGE_CIRCUIT_BREAKER_MS;
+  }
+}
+
 async function requestGeminiImage(prompt, aspectRatio, key, timeoutMs) {
+  if (Date.now() < geminiImageCircuitOpenUntil) {
+    throw new HttpError(503, "Gemini Image sementara dilewati setelah beberapa kegagalan. Mencoba provider gambar cadangan.");
+  }
+
   let lastResponse;
   let lastPayload;
   let lastModel = GEMINI_IMAGE_MODELS[0];
+  let lastDiagnostics = null;
   for (const model of GEMINI_IMAGE_MODELS) {
     lastModel = model;
-    const response = await providerFetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseModalities: ["TEXT", "IMAGE"], imageConfig: { aspectRatio } },
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      },
-      "Gemini Image",
-    );
-    if (!response.ok) {
-      lastResponse = response;
-      if (response.status === 401 || response.status === 403) break;
-      continue;
+    let attempt = 0;
+    while (true) {
+      let response;
+      try {
+        response = await providerFetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { responseModalities: ["TEXT", "IMAGE"], imageConfig: { aspectRatio } },
+            }),
+            signal: AbortSignal.timeout(timeoutMs),
+          },
+          "Gemini Image",
+        );
+      } catch (error) {
+        recordGeminiImageFailure();
+        throw error;
+      }
+
+      if (!response.ok) {
+        lastResponse = response;
+        lastDiagnostics = await geminiImageErrorDiagnostics(response);
+        logGeminiImageFailure(model, lastDiagnostics);
+
+        if (response.status === 404) break;
+        if (response.status === 429 && lastDiagnostics.limit !== "0"
+          && attempt < GEMINI_IMAGE_MAX_RATE_LIMIT_RETRIES) {
+          const delayMs = retryDelayMilliseconds(lastDiagnostics.retryDelay);
+          if (delayMs !== null && delayMs > 0 && delayMs < timeoutMs) {
+            attempt += 1;
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            continue;
+          }
+        }
+        if (response.status >= 500 && attempt < 1) {
+          attempt += 1;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+        recordGeminiImageFailure();
+        return { response, model, diagnostics: lastDiagnostics };
+      }
+
+      const payload = await response.json().catch(() => null);
+      const parts = payload?.candidates?.flatMap((candidate) => candidate?.content?.parts || []) || [];
+      const image = parts.find((part) => typeof part?.inlineData?.data === "string" && part.inlineData.data.length > 0);
+      if (image) {
+        geminiImageConsecutiveFailures = 0;
+        geminiImageCircuitOpenUntil = 0;
+        return { image: image.inlineData, model, payload };
+      }
+      if (payload?.promptFeedback?.blockReason) {
+        geminiImageConsecutiveFailures = 0;
+        geminiImageCircuitOpenUntil = 0;
+        return { payload, model };
+      }
+      lastPayload = payload;
+      break;
     }
-    const payload = await response.json().catch(() => null);
-    const parts = payload?.candidates?.flatMap((candidate) => candidate?.content?.parts || []) || [];
-    const image = parts.find((part) => typeof part?.inlineData?.data === "string" && part.inlineData.data.length > 0);
-    if (image) return { image: image.inlineData, model, payload };
-    lastPayload = payload;
   }
-  return { response: lastResponse, payload: lastPayload, model: lastModel };
+  recordGeminiImageFailure();
+  return { response: lastResponse, payload: lastPayload, model: lastModel, diagnostics: lastDiagnostics };
 }
 
 async function probeMonid(key) {

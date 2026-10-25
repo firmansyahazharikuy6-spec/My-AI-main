@@ -198,7 +198,7 @@ test("Pollinations model returns a direct image URL without calling the API serv
   ], { imageGeneration: true })) chunks.push(chunk);
 
   const imageUrl = new URL(chunks[0].image);
-  assert.match(imageUrl.pathname, /^\/prompt\/A%20clear%2C%20concrete%20visual%20depiction/);
+  assert.match(decodeURIComponent(imageUrl.pathname), /^\/prompt\/A clear, coherent illustration centered on/);
   assert.match(imageUrl.pathname, /red%20robot/i);
   assert.equal(imageUrl.searchParams.get("model"), "flux");
   assert.match(imageUrl.search, /width=1024&height=1024/);

@@ -59,10 +59,10 @@ test("image prompt fallback preserves concrete intent across ten Indonesian requ
     ["poster 17 agustus gaya retro", ["poster", "red-and-white"]],
     ["pemandangan sawah pagi hari", ["rice paddy", "morning"]],
     ["logo kopi minimalis", ["coffee", "logo"]],
-    ["kebebasan", ["freedom", "horizon"]],
+    ["kebebasan", ["coherent illustration centered on", "kebebasan"]],
     ["Please create an image of a city skyline at dawn with warm windows", ["city skyline", "dawn"]],
     ["kucing", ["cat", "coherent everyday scene"]],
-    ["Buatkan ilustrasi hutan tropis luas setelah hujan, sungai jernih di antara pohon, kabut pagi, cahaya matahari menembus kanopi, tanpa manusia atau tulisan.", ["tropical rainforest", "clear river", "morning mist"]],
+    [`tolong buatkan gambar tentang festival desa dengan lampion warna-warni dan musik tradisional ${"suasana ramai dan hangat ".repeat(50)}`, ["festival desa", "lampion"]],
     ["tolong gambarkn matahari terbit di balik gunung dengan danau tenang", ["sunrise", "mountain"]],
   ];
   for (const [rawPrompt, anchors] of cases) {
@@ -75,6 +75,7 @@ test("image prompt fallback preserves concrete intent across ten Indonesian requ
       assert.ok(plan.prompt.toLowerCase().includes(anchor.toLowerCase()), `missing "${anchor}" for: ${rawPrompt}`);
     }
     assert.deepEqual(validateImagePromptPlan(plan, cleaned), plan);
+    assert.ok(plan.prompt.length <= 2400, `fallback exceeded output limit for: ${rawPrompt}`);
     const chunks = [];
     for await (const chunk of streamChat("pollinations", "flux", [{ role: "user", content: rawPrompt }], {
       imageGeneration: true,
@@ -86,6 +87,23 @@ test("image prompt fallback preserves concrete intent across ten Indonesian requ
     assert.equal(image.imageMetadata.model, "flux");
     assert.equal(image.imageMetadata.modelLabel, "Flux (Pollinations)");
   }
+});
+
+test("abstract fallback is generic rather than a fixed freedom scene", () => {
+  const freedom = buildFallbackImagePromptPlan("kebebasan");
+  const hope = buildFallbackImagePromptPlan("harapan");
+  assert.match(freedom.prompt, /coherent illustration centered on/i);
+  assert.match(hope.prompt, /coherent illustration centered on/i);
+  assert.match(freedom.prompt, /kebebasan/i);
+  assert.match(hope.prompt, /harapan/i);
+  assert.doesNotMatch(freedom.prompt, /mountain ridge|horizon|lone person/i);
+  assert.doesNotMatch(hope.prompt, /mountain ridge|horizon|lone person/i);
+});
+
+test("generic fallback preserves concrete subjects instead of abstracting the entire request", () => {
+  const plan = buildFallbackImagePromptPlan("Please create an image of a city skyline at dawn with warm windows");
+  assert.match(plan.prompt, /city skyline at dawn with warm windows/i);
+  assert.doesNotMatch(plan.prompt, /woman|mountain ridge/i);
 });
 
 test("invalid image prompt plans fall back locally without losing known subject anchors", () => {

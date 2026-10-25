@@ -80,15 +80,6 @@ const KNOWN_SCENES = [
     aspect: "1:1",
   },
   {
-    match: /\bkebebasan\b|\bfreedom\b|\bliberty\b/i,
-    prompt: "A lone person seen from behind standing on an open mountain ridge at sunrise, looking toward a vast unobstructed horizon, wind moving their coat, expansive sky and distant clouds, visual metaphor for freedom and possibility, cinematic natural light, no text.",
-    negative: "prison bars, chains, weapons, unrelated objects, text, logos, watermark",
-    style: "Cinematic conceptual landscape",
-    assumptions: "Saya menafsirkan kebebasan secara simbolis sebagai seseorang yang memandang cakrawala terbuka.",
-    required: ["freedom", "horizon"],
-    aspect: "16:9",
-  },
-  {
     match: /\b(?:gunung|mountain|pegunungan|mountains)\b/i,
     prompt: "A quiet mountain landscape at sunset, layered ridgelines fading into the distance, a still lake reflecting warm amber light, natural color palette, cinematic wide composition, no text.",
     negative: "city skyline, unrelated people, text, logos, watermark",
@@ -133,7 +124,10 @@ function inferAspect(prompt) {
 }
 
 export function buildFallbackImagePromptPlan(rawPrompt) {
-  const cleaned = cleanImageGenerationPrompt(rawPrompt);
+  const normalized = cleanImageGenerationPrompt(rawPrompt);
+  const cleaned = normalized.length <= 1200
+    ? normalized
+    : normalized.slice(0, 1200).replace(/\s+\S*$/, "").trim();
   const subjects = new Set(cleaned.match(SUBJECT_TERMS)?.map((term) => term.toLowerCase()) || []);
   const isSingleLandscape = [...subjects].every((term) => ["gunung", "mountain", "danau", "lake"].includes(term));
   const known = subjects.size > 1 && !isSingleLandscape
@@ -164,7 +158,7 @@ export function buildFallbackImagePromptPlan(rawPrompt) {
   }
   const subject = cleaned || "a clear, coherent subject";
   return {
-    prompt: `A clear, concrete visual depiction of ${subject}. Keep the requested subject prominent and faithful to the request; establish a fitting setting, a readable action or visual relationship, natural atmosphere, balanced composition, and soft directional light. Use a polished editorial illustration style. Do not add unrelated main subjects or readable text.`,
+    prompt: `A clear, coherent illustration centered on ${subject}. Keep every named subject, setting, action, and relationship from the request. When a detail is abstract or missing, interpret it as a relevant visual metaphor or setting without adding an unrelated main subject. Use balanced composition, natural atmosphere, soft directional light, a polished editorial illustration style, and no readable text.`,
     negative: "unrelated main subjects, distorted anatomy, clutter, logos, watermark, unintended text",
     aspect: inferAspect(cleaned),
     style: "Polished editorial illustration",

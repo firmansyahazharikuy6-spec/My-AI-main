@@ -299,10 +299,12 @@ test("provider catalog test distinguishes working and rejected server-side secre
       }
       const model = target.match(/models\/([^/]+):generateContent$/)?.[1];
       imageModels.push(model);
-      if (model === "gemini-3.1-flash-image") {
-        return Response.json({ error: { message: "Quota exceeded" } }, { status: 429 });
-      }
-      assert.equal(model, "gemini-2.5-flash-image");
+      assert.equal(options.method, "POST");
+      const requestBody = JSON.parse(options.body);
+      assert.equal(requestBody.contents[0].parts[0].text, "Create a plain blue square, no text.");
+      assert.deepEqual(requestBody.generationConfig.responseModalities, ["TEXT", "IMAGE"]);
+      assert.equal(requestBody.generationConfig.imageConfig.aspectRatio, "1:1");
+      assert.equal(model, "gemini-3.1-flash-image");
       return Response.json({
         candidates: [{ content: { parts: [{ inlineData: { data: "generated-image-bytes", mimeType: "image/png" } }] } }],
         usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 6, totalTokenCount: 9 },
@@ -324,14 +326,120 @@ test("provider catalog test distinguishes working and rejected server-side secre
     assert.equal(result.providers.monid.status, "OK");
     assert.equal(result.providers.pollinations.status, "OK");
     assert.equal(result.providers["server-gemini-image"].status, "OK");
-    assert.equal(result.providers["server-gemini-image"].model, "gemini-2.5-flash-image");
-    assert.deepEqual(imageModels, ["gemini-3.1-flash-image", "gemini-2.5-flash-image"]);
+    assert.equal(result.providers["server-gemini-image"].model, "gemini-3.1-flash-image");
+    assert.deepEqual(imageModels, ["gemini-3.1-flash-image"]);
     assert.deepEqual(result.providers["server-gemini-image"].usage, {
       promptTokens: 3,
       completionTokens: 6,
       totalTokens: 9,
     });
     assert.doesNotMatch(JSON.stringify(result), /gemini-secret|monid-secret|generated-image-bytes/);
+  });
+
+  test("Gemini image quota-zero failures are logged safely and do not retry another model", async (context) => {
+    const { token, jwk } = await authorizedToken();
+    const imageModels = [];
+    const safeLogs = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => safeLogs.push(args);
+    context.after(() => { console.warn = originalWarn; });
+    setFetch(context, async (url) => {
+      const target = String(url);
+      if (target.includes("securetoken@system.gserviceaccount.com")) {
+        return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+      }
+      const model = target.match(/models\/([^/]+):generateContent$/)?.[1];
+      imageModels.push(model);
+      return Response.json({
+        error: {
+          status: "RESOURCE_EXHAUSTED",
+          details: [
+            {
+              "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+              violations: [{
+                quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                quotaValue: "0",
+              }],
+            },
+            { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "30s" },
+          ],
+        },
+      }, { status: 429 });
+    });
+    const response = await worker.fetch(new Request("https://worker.test/images/generate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: "kemerdekaan indonesia",
+        autoEnhance: false,
+        plan: {
+          prompt: "An Indonesian Independence Day flag ceremony at a village square.",
+          negative: "unrelated subjects, text",
+          aspect: "16:9",
+          style: "editorial illustration",
+          assumptions: "Saya menafsirkan tema sebagai upacara bendera.",
+          enhanced: false,
+          enhancer: "local",
+        },
+      }),
+    }), {
+      FIREBASE_PROJECT_ID: "my-ai-69027",
+      AUTHORIZED_EMAILS: "user@example.com",
+      GEMINI_API_KEY: "gemini-secret",
+      GUEST_AI_LIMITER: { limit: async () => ({ success: true }) },
+    });
+    assert.equal(response.status, 429);
+    const result = await response.json();
+    assert.match(result.error.message, /kuota|batas permintaan/i);
+    assert.deepEqual(imageModels, ["gemini-3.1-flash-image"]);
+    const diagnosticLog = JSON.stringify(safeLogs);
+    assert.match(diagnosticLog, /RESOURCE_EXHAUSTED/);
+    assert.match(diagnosticLog, /generativelanguage\.googleapis\.com\/generate_content_free_tier_requests/);
+    assert.match(diagnosticLog, /"limit":"0"/);
+    assert.match(diagnosticLog, /"retryDelay":"30s"/);
+    assert.doesNotMatch(JSON.stringify(result) + diagnosticLog, /gemini-secret/);
+  });
+
+  test("Gemini Image upstream HTTP 500 is sanitized into a fallback-eligible error", async (context) => {
+    const { token, jwk } = await authorizedToken();
+    const imageModels = [];
+    setFetch(context, async (url) => {
+      const target = String(url);
+      if (target.includes("securetoken@system.gserviceaccount.com")) {
+        return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+      }
+      imageModels.push(target.match(/models\/([^/]+):generateContent$/)?.[1]);
+      return Response.json({
+        error: { status: "INTERNAL", message: "provider-internal-detail-must-not-reach-client" },
+      }, { status: 500 });
+    });
+    const response = await worker.fetch(new Request("https://worker.test/images/generate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: "bendera Merah Putih",
+        autoEnhance: false,
+        plan: {
+          prompt: "A red-and-white Indonesian flag in a village square.",
+          negative: "text, logos",
+          aspect: "1:1",
+          style: "editorial illustration",
+          assumptions: "Bendera Merah Putih di lapangan desa.",
+          enhanced: false,
+          enhancer: "local",
+        },
+      }),
+    }), {
+      FIREBASE_PROJECT_ID: "my-ai-69027",
+      AUTHORIZED_EMAILS: "user@example.com",
+      GEMINI_API_KEY: "gemini-secret",
+      GUEST_AI_LIMITER: { limit: async () => ({ success: true }) },
+    });
+    assert.equal(response.status, 502);
+    const result = await response.json();
+    assert.match(result.error.message, /Gemini Image sedang mengalami gangguan/i);
+    assert.doesNotMatch(JSON.stringify(result), /provider-internal-detail|gemini-secret/);
+    assert.deepEqual(imageModels, ["gemini-3.1-flash-image", "gemini-3.1-flash-image"]);
   });
 
   test("provider catalogs map models into the requested access tiers", () => {
@@ -430,8 +538,9 @@ test("Worker CORS accepts production, Pages previews, and local development orig
   assert.equal(isAllowedOrigin("https://preview-branch.myai-v3-firmansyah.pages.dev"), true);
   assert.equal(isAllowedOrigin("http://localhost:4173"), true);
   assert.equal(isAllowedOrigin("http://127.0.0.1:4173"), true);
-  assert.equal(isAllowedOrigin("https://localhost:4173"), true);
+  assert.equal(isAllowedOrigin("https://localhost:4173"), false);
   assert.equal(isAllowedOrigin("https://pages.dev"), false);
+  assert.equal(isAllowedOrigin("https://another-project.pages.dev"), false);
   assert.equal(isAllowedOrigin("https://example.com"), false);
   assert.equal(isAllowedOrigin("https://custom.example", { APP_ORIGINS: "https://custom.example" }), true);
 
@@ -444,17 +553,31 @@ test("Worker CORS accepts production, Pages previews, and local development orig
     },
   }), {});
   assert.equal(response.status, 204);
-  assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), "https://preview-branch.myai-v3-firmansyah.pages.dev");
   assert.equal(response.headers.get("Access-Control-Allow-Methods"), "GET, POST, OPTIONS");
   assert.equal(response.headers.get("Access-Control-Allow-Headers"), "Content-Type, Authorization, X-Requested-With");
 
+  const disallowedResponse = await worker.fetch(new Request("https://worker.test/chat", {
+    method: "OPTIONS",
+    headers: { Origin: "https://another-project.pages.dev" },
+  }), {});
+  assert.equal(disallowedResponse.status, 403);
+  assert.equal(disallowedResponse.headers.get("Access-Control-Allow-Origin"), null);
+
   const pagesResponse = await pagesWorker.fetch(new Request("https://myai-v3-firmansyah.pages.dev/api/chat", {
     method: "OPTIONS",
-    headers: { Origin: "https://preview-branch.myai-v3-firmansyah.pages.dev" },
+    headers: { Origin: "https://b1259143.myai-v3-firmansyah.pages.dev" },
   }), {});
   assert.equal(pagesResponse.status, 204);
-  assert.equal(pagesResponse.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.equal(pagesResponse.headers.get("Access-Control-Allow-Origin"), "https://b1259143.myai-v3-firmansyah.pages.dev");
   assert.equal(pagesResponse.headers.get("Access-Control-Allow-Methods"), "GET, POST, OPTIONS");
+
+  const disallowedPagesResponse = await pagesWorker.fetch(new Request("https://myai-v3-firmansyah.pages.dev/api/chat", {
+    method: "OPTIONS",
+    headers: { Origin: "https://another-project.pages.dev" },
+  }), {});
+  assert.equal(disallowedPagesResponse.status, 204);
+  assert.equal(disallowedPagesResponse.headers.get("Access-Control-Allow-Origin"), null);
 });
 
 test("chat SSE starts with heartbeat and terminates idle providers with a readable timeout", async () => {
@@ -1553,6 +1676,53 @@ test("enhance-prompt authenticates and routes short prompt rewrites to fast Groq
   assert.equal(upstreamCalls, 1);
 });
 
+test("image prompt enhancement repairs invalid Groq JSON once and returns its actual route metadata (MOCK)", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  const requests = [];
+  setFetch(context, async (url, options = {}) => {
+    if (String(url).includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    assert.equal(String(url), "https://api.groq.com/openai/v1/chat/completions");
+    requests.push(JSON.parse(options.body));
+    const content = requests.length === 1
+      ? "not-json"
+      : JSON.stringify({
+        prompt: "A vivid Indonesian Independence Day flag-raising ceremony with prominent red-and-white flags in a village square, warm morning light, and a joyful community, editorial illustration, no text.",
+        negative: "unrelated portraits, incorrect flag colors, logos, watermark, text",
+        aspect: "16:9",
+        style: "Editorial illustration",
+        assumptions: "Saya menafsirkan permintaan sebagai perayaan 17 Agustus.",
+      });
+    return Response.json({ choices: [{ message: { content } }] });
+  });
+  const response = await worker.fetch(new Request("https://worker.test/enhance-prompt", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Origin: "https://myai-v3-firmansyah.pages.dev",
+    },
+    body: JSON.stringify({ mode: "image", prompt: "tolong buatka gambar tentang kemerdekaan indonesia" }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    GROQ_API_KEY: "groq-secret",
+    GUEST_AI_LIMITER: { limit: async () => ({ success: true }) },
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.enhanced, true);
+  assert.equal(result.enhancer, "groq");
+  assert.equal(result.enhancerModel, "openai/gpt-oss-20b");
+  assert.match(result.prompt, /Indonesian Independence Day/i);
+  assert.match(result.prompt, /red-and-white/i);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].response_format.type, "json_object");
+  assert.match(requests[1].messages[1].content, /repair/);
+  assert.doesNotMatch(JSON.stringify(result), /groq-secret/);
+});
+
 test("chat Worker injects quality instructions into gateway model requests", async (context) => {
   clearGatewayCatalogCache("groq");
   const { token, jwk } = await authorizedToken();
@@ -1798,4 +1968,68 @@ test("email endpoint authenticates, rate-limits, validates and sends through Res
   }), env);
   assert.equal(invalid.status, 400);
   assert.equal(resendCalls.length, 1);
+});
+
+test("Gemini Image circuit breaker opens after three consecutive provider failures (MOCK)", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  let mode = "success";
+  const imageModels = [];
+  setFetch(context, async (url) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    const model = target.match(/models\/([^/]+):generateContent$/)?.[1];
+    imageModels.push(model);
+    if (mode === "success") {
+      return Response.json({
+        candidates: [{ content: { parts: [{ inlineData: { data: "image-data", mimeType: "image/png" } }] } }],
+      });
+    }
+    return Response.json({
+      error: {
+        status: "RESOURCE_EXHAUSTED",
+        details: [{
+          "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+          violations: [{ quotaMetric: "test-quota", quotaValue: "0" }],
+        }],
+      },
+    }, { status: 429 });
+  });
+  const invoke = () => worker.fetch(new Request("https://worker.test/images/generate", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: "bendera Merah Putih",
+      autoEnhance: false,
+      plan: {
+        prompt: "A red-and-white Indonesian flag in a village square.",
+        negative: "text, logos",
+        aspect: "1:1",
+        style: "editorial illustration",
+        assumptions: "Bendera Merah Putih di lapangan desa.",
+        enhanced: false,
+        enhancer: "local",
+      },
+    }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    GEMINI_API_KEY: "gemini-secret",
+    GUEST_AI_LIMITER: { limit: async () => ({ success: true }) },
+  });
+
+  const success = await invoke();
+  assert.equal(success.status, 200);
+  mode = "quota";
+  for (let failure = 0; failure < 3; failure += 1) {
+    const response = await invoke();
+    assert.equal(response.status, 429);
+  }
+  const callsBeforeOpenCircuit = imageModels.length;
+  const openCircuitResponse = await invoke();
+  assert.equal(openCircuitResponse.status, 503);
+  assert.match((await openCircuitResponse.json()).error.message, /dilewati|cadangan/i);
+  assert.equal(imageModels.length, callsBeforeOpenCircuit);
+  assert.deepEqual(imageModels, Array(4).fill("gemini-3.1-flash-image"));
 });

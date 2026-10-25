@@ -1485,6 +1485,8 @@ function appendGeneratedImages(body, message) {
       const image = message.imageMetadata;
       metadata.textContent = [
         `Provider/model: ${image.modelLabel || message.providerLabel || image.provider || "tidak diketahui"}${image.model ? ` (${image.model})` : ""}`,
+        `Penyempurna: ${image.enhancer === "groq" ? `AI Groq (${image.enhancerModel || "model terpilih"})` : "fallback lokal"}`,
+        image.enhancementReason || "",
         image.assumptions ? `Asumsi: ${image.assumptions}` : "",
         image.fallbackReason ? `Fallback: ${image.fallbackReason}` : "",
       ].filter(Boolean).join(" · ");
@@ -2927,6 +2929,9 @@ function imageFallbackReasonFor(error) {
   const message = String(error?.message || error || "").toLowerCase();
   if (/\b429\b|quota|kuota|rate.?limit/.test(message)) return "kuota atau batas permintaan";
   if (/\b401\b|\b403\b|unauthori[sz]ed|forbidden|autentikasi/.test(message)) return "autentikasi provider";
+  if (/\b404\b|model.{0,30}(?:tidak ditemukan|tidak tersedia|not found)/.test(message)) return "model Gemini Image tidak tersedia";
+  if (/dilewati setelah beberapa kegagalan|beberapa kegagalan/.test(message)) return "Gemini Image sementara dilewati setelah kegagalan berulang";
+  if (/\b5\d\d\b|gangguan sementara|mengalami gangguan/.test(message)) return "gangguan sementara pada Gemini Image";
   if (/timeout|melewati batas waktu|tidak menerima data selama/.test(message)) return "provider melewati batas waktu";
   return "provider utama tidak tersedia";
 }
@@ -4129,6 +4134,9 @@ async function generateImageWithWorker(prompt, { aspectRatio, negativePrompt, au
         aspect: aspectRatio || promptPlan?.aspect || "1:1",
         assumptions: typeof result.assumptions === "string" ? result.assumptions : promptPlan?.assumptions || "",
         enhanced: result.enhanced === true || promptPlan?.enhanced === true,
+        enhancer: result.enhancer === "groq" ? "groq" : "local",
+        enhancerModel: typeof result.enhancerModel === "string" ? result.enhancerModel : "deterministic-fallback",
+        ...(typeof result.enhancementReason === "string" ? { enhancementReason: result.enhancementReason } : {}),
       },
     };
   } catch {

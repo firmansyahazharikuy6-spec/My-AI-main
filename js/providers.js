@@ -533,6 +533,11 @@ async function* pollinationsStream(model, messages, opts, signal) {
       aspect: imagePlan.aspect,
       assumptions: imagePlan.assumptions,
       enhanced: opts?.imagePromptPlan?.enhanced === true,
+      enhancer: opts?.imagePromptPlan?.enhancer === "groq" ? "groq" : "local",
+      enhancerModel: typeof opts?.imagePromptPlan?.enhancerModel === "string"
+        ? opts.imagePromptPlan.enhancerModel
+        : "deterministic-fallback",
+      ...(typeof opts?.imagePromptPlan?.reason === "string" ? { enhancementReason: opts.imagePromptPlan.reason } : {}),
       ...(opts?.imageFallbackReason ? { fallbackReason: opts.imageFallbackReason } : {}),
     },
   };
@@ -575,7 +580,11 @@ export async function enhanceImagePrompt(prompt, {
       enhanced: result.enhanced === true && plan.prompt !== fallback.prompt,
       enhancer: result.enhancer === "groq" ? "groq" : "local",
       enhancerModel: typeof result.enhancerModel === "string" ? result.enhancerModel : "deterministic-fallback",
-      ...(!result.enhanced ? { reason: "Penyempurnaan AI tidak tersedia; prompt lokal digunakan." } : {}),
+      ...(!result.enhanced ? {
+        reason: typeof result.reason === "string"
+          ? result.reason
+          : "Penyempurnaan AI tidak tersedia; prompt lokal digunakan.",
+      } : {}),
     };
   } catch (error) {
     if (signal?.aborted) throw error;
