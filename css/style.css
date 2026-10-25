@@ -5330,3 +5330,21 @@ dialog:not(.voice-chat-dialog):not(.html-preview-dialog):not(.file-preview-dialo
     transform: rotate(180deg);
   }
 }
+
+@media (max-width: 600px) {
+  .welcome-logo {
+    width: 72px;
+    height: 72px;
+    margin-bottom: 12px;
+  }
+
+  .welcome h1 { font-size: clamp(28px, 7vw, 38px); }
+  .welcome .welcome-subtitle { font-size: 16px; }
+  .welcome .integration-strip { gap: 8px; }
+  .welcome .integration-chip {
+    min-height: 40px;
+    padding: 6px 14px;
+    font-size: 12px;
+  }
+  .composer { margin-bottom: max(24px, env(safe-area-inset-bottom)); }
+}
