@@ -1970,6 +1970,77 @@ test("email endpoint authenticates, rate-limits, validates and sends through Res
   assert.equal(resendCalls.length, 1);
 });
 
+test("optional image verification checks once and regenerates at most once for missing visual anchors (MOCK)", async (context) => {
+  clearGatewayCatalogCache("gemini");
+  const { token, jwk } = await authorizedToken();
+  const generationPrompts = [];
+  let visionCalls = 0;
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    if (target.endsWith("/v1beta/models?pageSize=1000")) {
+      return Response.json({
+        models: [{
+          name: "models/gemini-2.5-flash",
+          displayName: "Gemini Flash",
+          supportedGenerationMethods: ["generateContent"],
+        }],
+      });
+    }
+    const body = JSON.parse(options.body);
+    if (body.contents?.[0]?.parts?.some((part) => part.inlineData)) {
+      visionCalls += 1;
+      assert.equal(body.generationConfig.responseMimeType, "application/json");
+      return Response.json({
+        candidates: [{
+          content: { parts: [{ text: JSON.stringify({ score: 0.4, missing: ["red-and-white flag"] }) }] },
+        }],
+      });
+    }
+    generationPrompts.push(body.contents[0].parts[0].text);
+    return Response.json({
+      candidates: [{ content: { parts: [{ inlineData: { data: `image-${generationPrompts.length}`, mimeType: "image/png" } }] } }],
+    });
+  });
+
+  const response = await worker.fetch(new Request("https://worker.test/images/generate", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: "kemerdekaan indonesia",
+      verifyMatch: true,
+      autoEnhance: false,
+      plan: {
+        prompt: "An Indonesian Independence Day celebration with a red-and-white flag.",
+        negative: "unrelated subjects, text",
+        aspect: "16:9",
+        style: "editorial illustration",
+        assumptions: "Perayaan kemerdekaan Indonesia.",
+        enhanced: false,
+        enhancer: "local",
+      },
+    }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    GEMINI_API_KEY: "gemini-secret",
+    GUEST_AI_LIMITER: { limit: async () => ({ success: true }) },
+  });
+
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(visionCalls, 1);
+  assert.equal(generationPrompts.length, 2);
+  assert.match(generationPrompts[1], /Clearly include these missing requested visual elements: red-and-white flag/);
+  assert.equal(result.image, "image-2");
+  assert.equal(result.verification.status, "regenerated_once");
+  assert.equal(result.verification.score, 0.4);
+  assert.deepEqual(result.verification.missing, ["red-and-white flag"]);
+  assert.doesNotMatch(JSON.stringify(result), /gemini-secret/);
+});
+
 test("Gemini Image circuit breaker opens after three consecutive provider failures (MOCK)", async (context) => {
   const { token, jwk } = await authorizedToken();
   let mode = "success";

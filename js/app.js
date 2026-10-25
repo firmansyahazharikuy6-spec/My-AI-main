@@ -1489,6 +1489,9 @@ function appendGeneratedImages(body, message) {
         image.enhancementReason || "",
         image.assumptions ? `Asumsi: ${image.assumptions}` : "",
         image.fallbackReason ? `Fallback: ${image.fallbackReason}` : "",
+        image.verification
+          ? `Verifikasi kecocokan: ${image.verification.status}${Number.isFinite(image.verification.score) ? ` (${Math.round(image.verification.score * 100)}%)` : ""}${image.verification.reason ? ` · ${image.verification.reason}` : ""}`
+          : "",
       ].filter(Boolean).join(" · ");
       const actions = document.createElement("div");
       actions.className = "image-generation-actions";
@@ -4085,7 +4088,7 @@ function imageAspectRatioForPrompt(prompt) {
   return "1:1";
 }
 
-async function generateImageWithWorker(prompt, { aspectRatio, negativePrompt, authToken, signal, promptPlan, autoEnhance = true } = {}) {
+async function generateImageWithWorker(prompt, { aspectRatio, negativePrompt, authToken, signal, promptPlan, autoEnhance = true, verifyMatch = false } = {}) {
   if (!AI_API_URL) throw new Error("API gambar Gemini belum dikonfigurasi.");
   const token = authToken || await getAuthToken();
   if (!token) throw new Error("Masuk ke akun yang diizinkan untuk membuat gambar dengan Gemini.");
@@ -4100,6 +4103,7 @@ async function generateImageWithWorker(prompt, { aspectRatio, negativePrompt, au
       ...(promptPlan ? { plan: promptPlan } : {}),
       aspectRatio,
       autoEnhance,
+      verifyMatch,
     }),
     signal: signal && typeof AbortSignal.any === "function"
       ? AbortSignal.any([signal, AbortSignal.timeout(95000)])
@@ -4136,6 +4140,7 @@ async function generateImageWithWorker(prompt, { aspectRatio, negativePrompt, au
         enhanced: result.enhanced === true || promptPlan?.enhanced === true,
         enhancer: result.enhancer === "groq" ? "groq" : "local",
         enhancerModel: typeof result.enhancerModel === "string" ? result.enhancerModel : "deterministic-fallback",
+        ...(result.verification && typeof result.verification === "object" ? { verification: result.verification } : {}),
         ...(typeof result.enhancementReason === "string" ? { enhancementReason: result.enhancementReason } : {}),
       },
     };
@@ -4610,6 +4615,7 @@ async function respond() {
           promptPlan: imagePromptPlan,
           signal: abort.signal,
           autoEnhance: $("imageAutoEnhance")?.getAttribute("aria-checked") !== "false",
+          verifyMatch: $("imageVerifyMatch")?.getAttribute("aria-checked") === "true",
           imageFallbackReason,
         })
         : streamChat(model.provider, model.id, [{ role: "user", content: last.content }], streamOptions, abort.signal)
@@ -4892,6 +4898,7 @@ async function respond() {
                 negativePrompt: imagePromptPlan.negative || structured.data.negative_prompt,
                 promptPlan: imagePromptPlan,
                 autoEnhance: $("imageAutoEnhance")?.getAttribute("aria-checked") !== "false",
+                verifyMatch: $("imageVerifyMatch")?.getAttribute("aria-checked") === "true",
               });
               const imageBlob = imageResult.blob;
               reply.imageMetadata = imageResult.metadata;
@@ -6139,14 +6146,22 @@ function bindEvents() {
   applyLanguage(getLanguage());
   updateCompressorMenuLabel();
   const imageAutoEnhance = $("imageAutoEnhance");
+  const imageVerifyMatch = $("imageVerifyMatch");
   try {
     imageAutoEnhance?.setAttribute("aria-checked", localStorage.getItem("myai_image_auto_enhance") !== "false" ? "true" : "false");
+    imageVerifyMatch?.setAttribute("aria-checked", localStorage.getItem("myai_image_verify_match") === "true" ? "true" : "false");
   } catch {}
   imageAutoEnhance?.addEventListener("click", (event) => {
     event.stopPropagation();
     const enabled = imageAutoEnhance.getAttribute("aria-checked") !== "true";
     imageAutoEnhance.setAttribute("aria-checked", String(enabled));
     try { localStorage.setItem("myai_image_auto_enhance", String(enabled)); } catch {}
+  });
+  imageVerifyMatch?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const enabled = imageVerifyMatch.getAttribute("aria-checked") !== "true";
+    imageVerifyMatch.setAttribute("aria-checked", String(enabled));
+    try { localStorage.setItem("myai_image_verify_match", String(enabled)); } catch {}
   });
   const languageSelect = $("languageSelect");
   const languageButton = $("languageButton");
