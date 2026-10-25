@@ -11,7 +11,7 @@ import {
   cleanImageGenerationPrompt,
   validateImagePromptPlan,
 } from "../../js/image-prompts.js";
-import { CanvaError, createPresentation, finishOAuth, startOAuth } from "./canva.ts";
+import { CanvaError } from "./canva.ts";
 import {
   corsHeaders as sharedCorsHeaders,
   HTTP_TIMEOUTS,
@@ -33,6 +33,7 @@ import {
   GuestTrialCounter,
 } from "./rate-limit.js";
 import { readProviderKeys as readKeys } from "./providers/keys.js";
+import { handleCanvaCallback, handleCanvaRoute, validatePresentationBody as validateCanvaBody } from "./routes/canva.js";
 export { isAllowedOrigin } from "./http.js";
 export { AI_ROUTE_LIMITS, AIRateLimitStore, EmailActionStore, GuestTrialCounter } from "./rate-limit.js";
 
@@ -585,39 +586,7 @@ const readProviderKeys = (raw, env) => readKeys(raw, env, HttpError);
 export { readProviderKeys };
 
 export function validatePresentationBody(body) {
-  if (Object.keys(body).some((field) => !["title", "slides", "exportFormat"].includes(field))) {
-    throw new HttpError(400, "Permintaan presentasi berisi field yang tidak dikenal.");
-  }
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  if (!title || title.length > 200) {
-    throw new HttpError(400, "Judul presentasi wajib diisi (maksimal 200 karakter).");
-  }
-  if (!Array.isArray(body.slides) || !body.slides.length || body.slides.length > 50) {
-    throw new HttpError(400, "Outline presentasi harus berisi 1–50 slide.");
-  }
-  const slides = body.slides.map((slide, index) => {
-    if (!slide || typeof slide !== "object" || Array.isArray(slide)
-      || Object.keys(slide).some((field) => !["title", "content", "notes"].includes(field))) {
-      throw new HttpError(400, `Data slide ${index + 1} tidak valid.`);
-    }
-    const slideTitle = typeof slide.title === "string" ? slide.title.trim() : "";
-    if (!slideTitle || slideTitle.length > 300 || !Array.isArray(slide.content)
-      || slide.content.length > 30
-      || !slide.content.every((line) => typeof line === "string" && line.trim() && line.length <= 2000)
-      || (slide.notes !== undefined && (typeof slide.notes !== "string" || slide.notes.length > 4000))) {
-      throw new HttpError(400, `Konten slide ${index + 1} tidak valid.`);
-    }
-    return {
-      title: slideTitle,
-      content: slide.content.map((line) => line.trim()),
-      ...(typeof slide.notes === "string" && slide.notes.trim() ? { notes: slide.notes.trim() } : {}),
-    };
-  });
-  const exportFormat = body.exportFormat === undefined ? "pptx" : body.exportFormat;
-  if (exportFormat !== "pptx" && exportFormat !== "pdf") {
-    throw new HttpError(400, "Format ekspor presentasi harus PPTX atau PDF.");
-  }
-  return { title, slides, exportFormat };
+  return validateCanvaBody(body, HttpError);
 }
 
 async function readJsonBody(request) {
@@ -2332,11 +2301,8 @@ export default {
       const providerTestRoute = pathSegments.slice(-2).join("/");
       const sendEmailRoute = pathSegments.slice(-2).join("/");
       const healthRoute = route === "health";
-      const canvaRoute = pathSegments.slice(-3).join("/");
-      if (canvaRoute === "canva/oauth/callback") {
-        if (request.method !== "GET") throw new HttpError(405, "Gunakan GET untuk callback OAuth Canva.");
-        return await finishOAuth(request, env);
-      }
+      const canvaCallbackResponse = await handleCanvaCallback(request, env, HttpError);
+      if (canvaCallbackResponse) return canvaCallbackResponse;
       if (guestRoute === "guest/config") {
         if (request.method !== "GET") throw new HttpError(405, "Gunakan GET untuk memuat konfigurasi AI guest.");
         const siteKey = typeof env.TURNSTILE_SITE_KEY === "string" ? env.TURNSTILE_SITE_KEY.trim() : "";
@@ -2358,20 +2324,13 @@ export default {
         return await guestChat(request, env, keys);
       }
       const user = await requireAuthorizedUser(request, env);
-      if (canvaRoute === "canva/oauth/start") {
-        if (request.method !== "GET") throw new HttpError(405, "Gunakan GET untuk memulai koneksi Canva.");
-        await enforceAIRateLimit(user, env, "canva-oauth");
-        return jsonResponse({ authorizationUrl: await startOAuth(request, env, user.sub) }, 200, request);
-      }
-      if (route === "presentation") {
-        if (request.method !== "POST") throw new HttpError(405, "Gunakan POST untuk membuat presentasi Canva.");
-        await enforceAIRateLimit(user, env, "canva-presentation");
-        const body = validatePresentationBody(await readJsonBody(request));
-        return jsonResponse(await createPresentation(env, user.sub, {
-          title: body.title,
-          slides: body.slides,
-        }, body.exportFormat), 200, request);
-      }
+      const canvaResponse = await handleCanvaRoute(request, env, user, {
+        HttpError,
+        enforceAIRateLimit,
+        jsonResponse,
+        readJsonBody,
+      });
+      if (canvaResponse) return canvaResponse;
       if (imageRoute === "images/generate") return await generateImage(request, env, user);
       const { keys, warnings } = readProviderKeys(env.AI_PROVIDER_KEYS, env);
       if (monidRoute.startsWith("monid/")) {
