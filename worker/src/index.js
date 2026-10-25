@@ -34,6 +34,7 @@ import { readProviderKeys as readKeys } from "./providers/keys.js";
 import { handleCanvaCallback, handleCanvaRoute, validatePresentationBody as validateCanvaBody } from "./routes/canva.js";
 import { handleMonidRoute, MONID_API_BASE } from "./routes/monid.js";
 import { sendEmail as handleSendEmail, sendEmailPreview as handleSendEmailPreview } from "./routes/email.js";
+import { handleGuestRoute } from "./routes/guest.js";
 export { isAllowedOrigin } from "./http.js";
 export { AI_ROUTE_LIMITS, AIRateLimitStore, EmailActionStore, GuestTrialCounter } from "./rate-limit.js";
 
@@ -2008,8 +2009,6 @@ export default {
     try {
       const pathSegments = new URL(request.url).pathname.split("/").filter(Boolean);
       const route = pathSegments.at(-1) || "";
-      const guestRoute = pathSegments.slice(-2).join("/");
-      const guestImageRoute = pathSegments.slice(-3).join("/");
       const imageRoute = pathSegments.slice(-2).join("/");
       const monidRoute = pathSegments.slice(-2).join("/");
       const exploriumRoute = pathSegments.slice(-2).join("/");
@@ -2018,26 +2017,15 @@ export default {
       const healthRoute = route === "health";
       const canvaCallbackResponse = await handleCanvaCallback(request, env, HttpError);
       if (canvaCallbackResponse) return canvaCallbackResponse;
-      if (guestRoute === "guest/config") {
-        if (request.method !== "GET") throw new HttpError(405, "Gunakan GET untuk memuat konfigurasi AI guest.");
-        const siteKey = typeof env.TURNSTILE_SITE_KEY === "string" ? env.TURNSTILE_SITE_KEY.trim() : "";
-        const secret = typeof env.TURNSTILE_SECRET_KEY === "string" ? env.TURNSTILE_SECRET_KEY.trim() : "";
-        if (!siteKey || !secret) {
-          throw new HttpError(503, "AI guest belum dikonfigurasi. Admin perlu mengatur TURNSTILE_SITE_KEY dan TURNSTILE_SECRET_KEY di Cloudflare Worker.");
-        }
-        return jsonResponse({ turnstileSiteKey: siteKey }, 200, request);
-      }
-      if (guestImageRoute === "guest/images/pollinations" || imageRoute === "images/pollinations") {
-        throw new HttpError(410, "Pembuatan gambar Pollinations kini dimuat langsung oleh browser.");
-      }
-      if (guestRoute === "guest/models" || guestRoute === "guest/chat" || guestRoute === "guest/transcribe") {
-        const { keys } = readProviderKeys(env.AI_PROVIDER_KEYS, env);
-        if (guestRoute === "guest/models") return await getGuestModels(request, env, keys);
-        if (guestRoute === "guest/transcribe") {
-          return await guestTranscribe(request, env, keys);
-        }
-        return await guestChat(request, env, keys);
-      }
+      const guestResponse = await handleGuestRoute(request, env, {
+        HttpError,
+        readProviderKeys,
+        getGuestModels,
+        guestChat,
+        guestTranscribe,
+        jsonResponse,
+      });
+      if (guestResponse) return guestResponse;
       const user = await requireAuthorizedUser(request, env);
       const canvaResponse = await handleCanvaRoute(request, env, user, {
         HttpError,
