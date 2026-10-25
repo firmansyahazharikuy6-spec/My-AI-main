@@ -4510,6 +4510,7 @@ body { font-size: 16px; }
   width: min(960px, calc(100% - 24px));
   min-height: 0;
   padding: 7px 10px;
+  margin-bottom: max(4px, env(safe-area-inset-bottom));
 }
 .composer.tools-menu-open { z-index: 999; }
 .composer textarea {

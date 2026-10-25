@@ -3965,11 +3965,8 @@ function setComposerMode(mode) {
     return;
   }
   composerMode = mode;
-  const imageModeActive = !mode && taskMode === "image";
-  $("modeStatus").classList.toggle("hidden", !mode && !imageModeActive);
-  $("modeLabel").textContent = imageModeActive
-    ? "Mode Gambar gratis via Pollinations.ai. Prompt dikirim ke layanan publik — jangan tulis data pribadi."
-    : mode === "research"
+  $("modeStatus").classList.toggle("hidden", !mode);
+  $("modeLabel").textContent = mode === "research"
       ? "Riset web aktif. Biaya pencarian dapat berlaku."
       : mode === "web"
         ? "Pencarian web aktif. Biaya pencarian dapat berlaku."
