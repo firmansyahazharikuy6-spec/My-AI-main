@@ -1,5 +1,8 @@
 node_modules/
 www/
+.wrangler/
+pages/dist/
+firebase-debug.log
 .env
 .env.*
 !.env.example

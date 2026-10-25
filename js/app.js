@@ -5115,6 +5115,7 @@ function applyAuthLanguage() {
   document.querySelector(".auth-divider span").textContent = authText("continueWith");
   $("loginGoogle").setAttribute("aria-label", getLanguage() === "id" ? "Lanjutkan dengan Google" : "Continue with Google");
   $("loginGithub").setAttribute("aria-label", authText("continueGithub"));
+  $("loginGithubLabel").textContent = authText("continueGithub");
   document.querySelector(".phone-auth h3").textContent = authText("continuePhone");
   document.querySelector("label[for='authPhoneCountry']").textContent = authText("phoneCountry");
   document.querySelector("label[for='authPhone']").textContent = authText("phoneLabel");
