@@ -3,29 +3,19 @@ const GATEWAY_PROVIDERS = {
   groq: { label: "Groq · Gateway", keyName: "GROQ_API_KEY" },
   openrouter: { label: "OpenRouter · Gateway", keyName: "OPENROUTER_API_KEY" },
   nvidia: { label: "NVIDIA NIM", keyName: "NVIDIA_API_KEY or NVIDIA_NIM_API_KEY" },
+  anthropic: { label: "Anthropic Claude", keyName: "CLAUDE_API_KEY or ANTHROPIC_API_KEY" },
+  moonshot: { label: "Moonshot Kimi", keyName: "KIMI_API_KEY or MOONSHOT_API_KEY" },
 };
 const GATEWAY_LABELS = {
   gemini: "Gemini",
   groq: "Groq",
   openrouter: "OpenRouter",
   nvidia: "NVIDIA",
+  anthropic: "Anthropic Claude",
+  moonshot: "Moonshot Kimi",
 };
-const GATEWAY_FALLBACK_PRIORITY = ["groq", "gemini", "nvidia", "openrouter"];
-const BUILTIN_TEXT_FALLBACKS = {
-  groq: {
-    id: "llama-3.1-8b-instant",
-    name: "Llama 3.1 8B Instant",
-    accessTier: "free",
-    priceTier: "check",
-  },
-  gemini: {
-    id: "gemini-2.5-flash",
-    name: "Gemini 2.5 Flash",
-    accessTier: "free",
-    priceTier: "check",
-    imageSupport: true,
-  },
-};
+const GATEWAY_FALLBACK_PRIORITY = ["nvidia", "groq", "gemini", "openrouter", "moonshot", "anthropic"];
+const MAX_AUTOMATIC_FALLBACK_MODELS = 5;
 const GATEWAY_CATALOG_TTL_MS = 5 * 60 * 1000;
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_CHARS = 1_500_000;
@@ -36,6 +26,12 @@ const UPSTREAM_IDLE_TIMEOUT_MS = 30_000;
 const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 const catalogCache = new Map();
 const modelHealth = new Map();
+const PROMPT_OPTIMIZER_INSTRUCTIONS = [
+  "You are a strict prompt rewriting engine. Your only task is to rewrite the user's latest draft as a clearer, more specific, effective prompt.",
+  "Never answer the draft, greet the user, ask questions, explain your edits, add technical commentary, or include an introduction or quotation marks around the result.",
+  "Return only the rewritten prompt. Preserve the user's intent and language. Structure it naturally with the task, relevant context or constraints, and the expected output format when useful.",
+  "For a short or rough request, expand it into a clear, actionable prompt without inventing facts. For a greeting or casual message, rewrite it as a natural, structured request for an AI assistant to help; do not respond to the greeting.",
+].join(" ");
 export function clearGatewayCatalogCache(provider) {
   if (provider) {
     catalogCache.delete(provider);
@@ -62,14 +58,45 @@ class GatewayError extends Error {
   }
 }
 
+function buildAnthropicBody(input) {
+  const system = input.messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n");
+  const messages = input.messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role,
+      content: [
+        ...(message.content ? [{ type: "text", text: message.content }] : []),
+        ...imageParts(message.images || []).map((image) => ({
+          type: "image",
+          source: { type: "base64", media_type: image.mimeType, data: image.data },
+        })),
+      ],
+    }));
+  return {
+    model: input.model,
+    max_tokens: 4096,
+    messages,
+    stream: true,
+    temperature: Math.min(1, input.temperature),
+    ...(system ? { system } : {}),
+  };
+}
+
 const OPENAI_COMPATIBLE_PROVIDER_URLS = {
   groq: "https://api.groq.com/openai/v1",
   openrouter: "https://openrouter.ai/api/v1",
   nvidia: "https://integrate.api.nvidia.com/v1",
+  moonshot: "https://api.moonshot.ai/v1",
 };
 
 function providerCatalogHeaders(provider, key) {
   if (provider === "gemini") return { "x-goog-api-key": key };
+  if (provider === "anthropic") {
+    return { "anthropic-version": "2023-06-01", "x-api-key": key };
+  }
   const headers = { Authorization: `Bearer ${key}` };
   if (provider === "openrouter") {
     headers["HTTP-Referer"] = "https://myai-v3-firmansyah.pages.dev";
@@ -84,6 +111,17 @@ function providerChatConfig(input) {
       url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`,
       headers: { "Content-Type": "application/json", "x-goog-api-key": input.key },
       body: buildGeminiBody(input),
+    };
+  }
+  if (input.provider === "anthropic") {
+    return {
+      url: "https://api.anthropic.com/v1/messages",
+      headers: {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        "x-api-key": input.key,
+      },
+      body: buildAnthropicBody(input),
     };
   }
   const baseUrl = OPENAI_COMPATIBLE_PROVIDER_URLS[input.provider];
@@ -109,7 +147,9 @@ export const PROVIDER_ADAPTERS = Object.freeze(Object.fromEntries(
     async listModels(key, signal) {
       const endpoint = id === "gemini"
         ? "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
-        : `${OPENAI_COMPATIBLE_PROVIDER_URLS[id]}/models`;
+        : id === "anthropic"
+          ? "https://api.anthropic.com/v1/models?limit=1000"
+          : `${OPENAI_COMPATIBLE_PROVIDER_URLS[id]}/models`;
       return fetch(endpoint, { headers: providerCatalogHeaders(id, key), signal });
     },
     chat(input) {
@@ -171,6 +211,9 @@ export function modelAccessTier(provider, model) {
     || size >= 30;
 
   if (provider === "openrouter" && model.priceTier === "free") return "free";
+  if (provider === "moonshot" && /\bkimi[- ]?k2(?:[.-]|$)/i.test(identity)) return "max";
+  if (provider === "anthropic" && /\bhaiku\b/i.test(identity)) return "pro";
+  if (provider === "nvidia" && /^nvidia\/cosmos-reason2-8b$/i.test(String(model.id || ""))) return "free";
   if (flagship) return "max";
   if (provider === "nvidia") return advanced ? "pro" : "basic";
   if (provider === "gemini") {
@@ -210,7 +253,10 @@ async function fetchGatewayCatalog(provider, key, { forceRefresh = false } = {})
       || /audio|tts|transcri|embedding|image|lyria|robotics|computer[-_ ]?use|live|antigravity/i.test(`${rawId} ${item.display_name || item.displayName || ""}`))) return [];
     if (/\b(?:image|flux|stable[\s_-]?diffusion|dall[\s_-]?e|text[-_ ]?to[-_ ]?image)\b/i.test(`${rawId} ${item.display_name || item.displayName || ""}`)) return [];
     if (provider === "groq" && /whisper|transcri|speech|audio|embed|moderation|guard|orpheus/i.test(rawId)) return [];
-    if (provider === "nvidia" && /embed|retriev|rerank|ranker|nemoguard|safety[-_ ]guard|content[-_ ]safety|topic[-_ ]control|reward|classifier|moderation/i.test(`${rawId} ${item.display_name || item.displayName || ""}`)) return [];
+    if (provider === "nvidia") {
+      if (/embed|retriev|rerank|ranker|nemoguard|safety[-_ ]guard|content[-_ ]safety|topic[-_ ]control|reward|classifier|moderation/i.test(`${rawId} ${item.display_name || item.displayName || ""}`)) return [];
+      if (!/^(?:nvidia\/|google\/|meta(?:-llama)?\/|microsoft\/)/i.test(rawId)) return [];
+    }
     if (provider === "openrouter") {
       const outputModalities = item.architecture?.output_modalities || ["text"];
       if (!outputModalities.includes("text") || outputModalities.includes("image")) return [];
@@ -228,8 +274,10 @@ async function fetchGatewayCatalog(provider, key, { forceRefresh = false } = {})
       name: name.slice(0, 160),
       priceTier: isFree ? "free" : "check",
       ...(Number.isSafeInteger(contextWindow) && contextWindow > 0 && contextWindow <= 10_000_000 ? { contextWindow } : {}),
-      ...(provider === "openrouter" && inputModalities.includes("image") ? { imageSupport: true } : {}),
+      ...(["openrouter", "nvidia"].includes(provider) && inputModalities.includes("image") ? { imageSupport: true } : {}),
       ...(provider === "groq" && /llama-3\.2-11b-vision|llama-4-(?:scout|maverick)/i.test(rawId) ? { imageSupport: true } : {}),
+      ...(provider === "nvidia" && /(?:llama-3\.2.*vision|llama-4-(?:scout|maverick))/i.test(rawId) ? { imageSupport: true } : {}),
+      ...(provider === "anthropic" && /^claude-(?:3|4)[.-]/i.test(rawId) ? { imageSupport: true } : {}),
       ...(provider === "gemini" && !/audio|tts|transcri|embedding|image/i.test(rawId) ? { imageSupport: true } : {}),
     }];
   });
@@ -377,12 +425,16 @@ function hasHealthReply(provider, payload) {
     : Array.isArray(content) && content.some((part) => typeof part?.text === "string" && part.text.trim());
 }
 
-function healthProbeModels(provider, models) {
+export function healthProbeModels(provider, models, limit = provider === "nvidia" ? 2 : 3) {
   return [...models].sort((left, right) => {
     const priority = (model) => {
       const id = model.id.toLowerCase();
       if (provider === "gemini" && id === "gemini-3-flash-preview") return 0;
-      if (provider === "nvidia" && /nvidia\/nemotron.*bolt.*e4b/.test(id)) return 0;
+      if (provider === "nvidia") {
+        if (/nvidia\/nemotron.*bolt.*e4b/.test(id)) return 0;
+        if (/nvidia\/nemotron.*(lightning|nano|mini|7b|8b|12b|15b|20b|30b|40b)/.test(id)) return 1;
+        if (/^(?:google\/|meta(?:-llama)?\/|microsoft\/)/.test(id)) return 2;
+      }
       if (provider === "openrouter") {
         if (id === "cohere/north-mini-code:free") return 0;
         if (/^(?:google\/|meta-llama\/|qwen\/)/.test(id) && model.priceTier === "free") return 0;
@@ -394,7 +446,7 @@ function healthProbeModels(provider, models) {
     return priority(left) - priority(right)
       || fast(left) - fast(right)
       || left.name.localeCompare(right.name);
-  }).slice(0, provider === "nvidia" ? 2 : 3);
+  }).slice(0, limit);
 }
 
 export async function probeGatewayProvider(provider, key) {
@@ -505,7 +557,7 @@ function validateMessages(value) {
   if (!Array.isArray(value) || value.length < 1 || value.length > 120) {
     throw new GatewayError(400, "Daftar messages harus berisi 1–120 pesan.");
   }
-  const messages = value.map((message) => {
+  const parsed = value.map((message) => {
     if (!message || !["system", "user", "assistant"].includes(message.role) || typeof message.content !== "string") {
       throw new GatewayError(400, "Setiap pesan harus memiliki role dan content yang valid.");
     }
@@ -523,10 +575,26 @@ function validateMessages(value) {
     }
     return { role: message.role, content: message.content, ...(images.length ? { images } : {}) };
   });
-  if (!messages.some((message) => message.role === "user")) {
+  const systemInstructions = [...new Set(parsed
+    .filter((message) => message.role === "system")
+    .map((message) => message.content.trim())
+    .filter(Boolean))];
+  const conversation = parsed.filter((message) => message.role !== "system");
+  let latestUserIndex = -1;
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    if (conversation[index].role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  if (latestUserIndex < 0) {
     throw new GatewayError(400, "Daftar messages harus berisi setidaknya satu pesan pengguna.");
   }
-  return messages;
+  const activeConversation = conversation.slice(0, latestUserIndex + 1);
+  return [
+    ...(systemInstructions.length ? [{ role: "system", content: systemInstructions.join("\n\n") }] : []),
+    ...activeConversation,
+  ];
 }
 
 export function validateGatewayBody(body, keys) {
@@ -539,7 +607,15 @@ export function validateGatewayBody(body, keys) {
   if (!model || model.length > 300) {
     throw new GatewayError(400, "Model gateway tidak valid.");
   }
-  const messages = validateMessages(body.messages);
+  let messages = validateMessages(body.messages);
+  const promptHelper = provider === "groq" && body.promptHelper === true;
+  if (promptHelper) {
+    const latestUserMessage = [...messages].reverse().find((message) => message.role === "user");
+    messages = [
+      { role: "system", content: PROMPT_OPTIMIZER_INSTRUCTIONS },
+      { role: "user", content: latestUserMessage.content },
+    ];
+  }
   const byteLength = new TextEncoder().encode(JSON.stringify(messages)).byteLength;
   if (byteLength > MAX_REQUEST_BYTES) throw new GatewayError(413, "Permintaan gateway melebihi batas 4 MiB.");
   const webSearch = body.webSearch === true;
@@ -552,9 +628,10 @@ export function validateGatewayBody(body, keys) {
     key,
     model,
     messages,
-    temperature: Number.isFinite(temperature) ? Math.max(0, Math.min(2, temperature)) : 0.7,
+    temperature: promptHelper ? 0.2 : Number.isFinite(temperature) ? Math.max(0, Math.min(2, temperature)) : 0.7,
     webSearch,
     researchMode: body.researchMode === true,
+    promptHelper,
   };
 }
 
@@ -601,7 +678,7 @@ function buildOpenAIBody(input) {
     ...(input.provider === "groq" || input.provider === "openrouter"
       ? { stream_options: { include_usage: true } }
       : {}),
-    temperature: input.provider === "nvidia" ? Math.min(1, input.temperature) : input.temperature,
+    temperature: ["nvidia", "moonshot"].includes(input.provider) ? Math.min(1, input.temperature) : input.temperature,
     max_tokens: 4096,
     ...(input.webSearch && input.provider === "openrouter"
       ? { plugins: [{ id: "web", max_results: input.researchMode ? 10 : 5 }] }
@@ -698,6 +775,12 @@ function providerEventHasText(provider, eventName, data) {
   if (provider === "gemini") {
     return (data.candidates?.[0]?.content?.parts || [])
       .some((part) => typeof part.text === "string" && Boolean(part.text.trim()));
+  }
+  if (provider === "anthropic") {
+    return data.type === "content_block_delta"
+      && data.delta?.type === "text_delta"
+      && typeof data.delta.text === "string"
+      && Boolean(data.delta.text.trim());
   }
   const choices = data.choices || [];
   return choices.some((choice) => {
@@ -813,7 +896,16 @@ async function* normalizeStream(response, provider) {
   for await (const event of readProviderEvents(response)) {
     const data = parseProviderData(event);
     if (!data) continue;
-    if (provider === "gemini" && data.usageMetadata) {
+    if (provider === "anthropic" && data.type === "message_start" && data.message?.usage) {
+      usage.prompt_tokens = Number(data.message.usage.input_tokens ?? usage.prompt_tokens);
+      usage.completion_tokens = Number(data.message.usage.output_tokens ?? usage.completion_tokens);
+      usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+      hasUsage = true;
+    } else if (provider === "anthropic" && data.type === "message_delta" && data.usage) {
+      usage.completion_tokens = Number(data.usage.output_tokens ?? usage.completion_tokens);
+      usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+      hasUsage = true;
+    } else if (provider === "gemini" && data.usageMetadata) {
       usage.prompt_tokens = Number(data.usageMetadata.promptTokenCount ?? usage.prompt_tokens);
       usage.completion_tokens = Number(data.usageMetadata.candidatesTokenCount ?? usage.completion_tokens);
       usage.total_tokens = Number(data.usageMetadata.totalTokenCount ?? (usage.prompt_tokens + usage.completion_tokens));
@@ -845,6 +937,11 @@ async function* normalizeStream(response, provider) {
       yield errorChunk(providerError || data.message || `${GATEWAY_LABELS[provider]} mengembalikan error saat streaming.`);
       break;
     }
+    if (provider === "anthropic") {
+      if (data.type === "content_block_delta" && data.delta?.type === "text_delta"
+        && typeof data.delta.text === "string") yield chatChunk(data.delta.text);
+      continue;
+    }
     const delta = data.choices?.[0]?.delta;
     const annotations = delta?.annotations || data.choices?.[0]?.message?.annotations || [];
     if (provider === "openrouter" && annotations.length) yield chatChunk("", { annotations });
@@ -855,11 +952,15 @@ async function* normalizeStream(response, provider) {
 }
 
 function metricsEvent(usage, model, startedAt) {
+  const durationMs = Math.max(0, Date.now() - startedAt);
   return `data: ${JSON.stringify({
     type: "metrics",
     tokens: usage.total_tokens,
     completion_tokens: usage.completion_tokens,
-    duration_ms: Math.max(0, Date.now() - startedAt),
+    duration_ms: durationMs,
+    ...(durationMs >= 100 && usage.completion_tokens > 0
+      ? { tokens_per_second: Math.round(usage.completion_tokens * 1000 / durationMs * 10) / 10 }
+      : {}),
     model,
   })}\n\n`;
 }
@@ -888,6 +989,9 @@ export function streamResponse(
   const stream = new ReadableStream({
     start(controller) {
       controller.enqueue(encoder.encode(": keep-alive\n\n"));
+      if (metrics.route) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "route", ...metrics.route })}\n\n`));
+      }
       for (const health of metrics.providerHealth || []) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "provider-health", ...health })}\n\n`));
       }
@@ -1015,7 +1119,7 @@ function waitForProviderRetry(signal, delayMs) {
   });
 }
 
-export async function handleGatewayRequest(request, keys) {
+export async function handleGatewayRequest(request, keys, { user, env } = {}) {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders(request) });
   }
@@ -1032,7 +1136,8 @@ export async function handleGatewayRequest(request, keys) {
     let body;
     try { body = raw.trim() ? JSON.parse(raw) : {}; } catch { throw new GatewayError(400, "Isi permintaan gateway harus berupa JSON yang valid."); }
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new GatewayError(400, "Payload gateway harus berupa objek JSON.");
-    const input = validateGatewayBody(body, keys);
+    const requestedInput = validateGatewayBody(body, keys);
+    let input = requestedInput;
     const allowFallback = body.allowFallback === true;
     if (!Object.values(keys || {}).some((key) => typeof key === "string" && key.trim())) {
       return jsonResponse({
@@ -1041,10 +1146,24 @@ export async function handleGatewayRequest(request, keys) {
         message: "API Secrets belum dikonfigurasi di Worker. Pastikan .dev.vars aktif atau jalankan wrangler dev.",
       }, 401, request);
     }
-    const { groups, errors } = await gatewayModelGroups(keys, [input.provider]);
+    const hasImages = input.messages.some((message) => message.images?.length);
+    const requestedCatalog = await gatewayModelGroups(keys, [input.provider]);
+    const { groups, errors } = requestedCatalog;
     const group = groups.find((item) => item.provider === `gateway-${input.provider}`);
     const selectedModel = group?.models.find((candidate) => candidate.id === input.model);
-    const hasImages = input.messages.some((message) => message.images?.length);
+    const providerHealth = [];
+    if (selectedModel) {
+      const premiumSelected = input.provider === "openrouter"
+        ? selectedModel.priceTier !== "free"
+        : selectedModel.accessTier !== "free";
+      const permittedUids = String(env?.PREMIUM_ALLOWED_UIDS || "")
+        .split(",")
+        .map((uid) => uid.trim())
+        .filter(Boolean);
+      if (premiumSelected && (!user?.sub || !permittedUids.includes(user.sub))) {
+        throw new GatewayError(403, "Paket akun saat ini tidak mengizinkan model premium ini.");
+      }
+    }
     if (selectedModel && hasImages && !selectedModel.imageSupport) {
       throw new GatewayError(400, `Model ${selectedModel.name} tidak mencantumkan dukungan input gambar.`);
     }
@@ -1055,27 +1174,36 @@ export async function handleGatewayRequest(request, keys) {
     const fallbackModels = async () => {
       const providers = fallbackProviders.filter((provider) => provider !== input.provider && keys?.[provider]);
       const catalog = await gatewayModelGroups(keys, providers);
-      const available = catalog.groups.flatMap((fallbackGroup) => fallbackGroup.models
+      const availableByProvider = catalog.groups.map((fallbackGroup) => ({
+        provider: fallbackGroup.provider.slice("gateway-".length),
+        models: fallbackGroup.models
         .filter((model) => model.accessTier === "free"
           && (fallbackGroup.provider !== "gateway-openrouter" || model.priceTier === "free")
+          && model.availabilityStatus !== "limited-rate"
           && (!hasImages || model.imageSupport)
           && (!input.webSearch || ["gateway-gemini", "gateway-openrouter"].includes(fallbackGroup.provider)))
-        .map((model) => ({ ...model, provider: fallbackGroup.provider.slice("gateway-".length) })))
-        .concat(providers.flatMap((provider) => {
-          const fallbackModel = BUILTIN_TEXT_FALLBACKS[provider];
-          const catalogLoaded = catalog.groups.some((group) => group.provider === `gateway-${provider}`);
-          if (!fallbackModel || catalogLoaded || hasImages && !fallbackModel.imageSupport
-            || input.webSearch && provider !== "gemini") return [];
-          return [{ ...fallbackModel, provider }];
-        }))
-        .sort((left, right) => GATEWAY_FALLBACK_PRIORITY.indexOf(left.provider) - GATEWAY_FALLBACK_PRIORITY.indexOf(right.provider)
-          || left.name.localeCompare(right.name));
-      const seen = new Set();
-      return available.filter((model) => {
-        if (seen.has(model.provider)) return false;
-        seen.add(model.provider);
-        return true;
-      });
+        .map((model) => ({ ...model, provider: fallbackGroup.provider.slice("gateway-".length) }))
+        .sort((left, right) => {
+          const fast = /(?:flash|instant|mini|lite|small|8b)/i;
+          return Number(fast.test(`${right.id} ${right.name}`)) - Number(fast.test(`${left.id} ${left.name}`))
+            || left.name.localeCompare(right.name);
+        }),
+      }));
+      availableByProvider.sort((left, right) => GATEWAY_FALLBACK_PRIORITY.indexOf(left.provider)
+        - GATEWAY_FALLBACK_PRIORITY.indexOf(right.provider));
+      const available = [];
+      for (let modelIndex = 0; available.length < MAX_AUTOMATIC_FALLBACK_MODELS; modelIndex++) {
+        let foundModel = false;
+        for (const provider of availableByProvider) {
+          const model = provider.models[modelIndex];
+          if (!model) continue;
+          foundModel = true;
+          available.push(model);
+          if (available.length >= MAX_AUTOMATIC_FALLBACK_MODELS) break;
+        }
+        if (!foundModel) break;
+      }
+      return available;
     };
     let activeInput = input;
     let fallback = null;
@@ -1087,7 +1215,6 @@ export async function handleGatewayRequest(request, keys) {
         ? errors[0]
         : `${input.provider}: model ${input.model} tidak lagi ada di katalog aktif.`;
     let primaryError = errors.length ? { status: 502, message: errors[0] } : null;
-    const providerHealth = [];
     if (!selectedModel) {
       providerHealth.push({
         provider: input.provider,
@@ -1110,10 +1237,12 @@ export async function handleGatewayRequest(request, keys) {
     })));
     if (retryStatus) appendFallbackAttempts();
     let fallbackCandidatesAdded = retryStatus && allowFallback;
+    const quotaLimitedProviders = new Set();
     for (let index = 0; index < attempts.length; index++) {
       const attempt = attempts[index];
       const isPrimaryAttempt = Boolean(selectedModel && index === 0);
       const attemptInput = attempt.input;
+      if (quotaLimitedProviders.has(attemptInput.provider)) continue;
       const upstream = upstreamConfig(attemptInput, request);
       let providerFailure = null;
       let providerSucceeded = false;
@@ -1183,7 +1312,7 @@ export async function handleGatewayRequest(request, keys) {
           const message = providerErrorMessage(attemptInput.provider, failedStatus, failureBody, attemptInput.key);
           providerFailure = {
             status: failedStatus,
-            retryable: failedStatus === 429 || failedStatus >= 500,
+            retryable: failedStatus >= 500,
             healthStatus: failedStatus === 402 || failedStatus === 429 ? "EXHAUSTED" : "ERROR",
             latencyMs: Date.now() - attemptStartedAt,
             message,
@@ -1226,11 +1355,15 @@ export async function handleGatewayRequest(request, keys) {
       if (isPrimaryAttempt) {
         primaryError = providerFailure;
         retryStatus = providerFailure.status;
-        if (allowFallback && !fallbackCandidatesAdded) {
+        const quotaExceeded = providerFailure.status === 402 || providerFailure.status === 429;
+        if ((allowFallback || quotaExceeded) && !fallbackCandidatesAdded) {
           candidates = await fallbackModels();
           appendFallbackAttempts();
           fallbackCandidatesAdded = true;
         }
+      }
+      if (providerFailure.status === 402 || providerFailure.status === 429) {
+        quotaLimitedProviders.add(attemptInput.provider);
       }
       retryMessage = providerFailure.message;
     }

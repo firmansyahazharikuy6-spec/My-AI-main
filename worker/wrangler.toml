@@ -6,9 +6,18 @@ workers_dev = true
 [vars]
 FIREBASE_PROJECT_ID = "my-ai-69027"
 APP_ORIGINS = ""
+EMAIL_RECIPIENT_ALLOWED_DOMAINS = ""
+CANVA_BRAND_TEMPLATE_ID = "OC-AaFxcyrOgfCY"
+CANVA_REDIRECT_URI = "https://myai-v3-free-api.firmansyahazharikuy6.workers.dev/canva/oauth/callback"
+MONID_MAX_RUN_COST = "0"
+TURNSTILE_SITE_KEY = ""
+
+[[kv_namespaces]]
+binding = "CANVA_TOKEN_STORE"
+id = "73523d1fecac45f9a153a807d541bdfc"
 
 [[ratelimits]]
-name = "GUEST_AI_LIMITER"
+name = "AI_RATE_LIMITER"
 namespace_id = "2026101540"
 
 	[ratelimits.simple]
@@ -19,6 +28,22 @@ namespace_id = "2026101540"
 name = "GUEST_TRIAL_COUNTER"
 class_name = "GuestTrialCounter"
 
+[[durable_objects.bindings]]
+name = "EMAIL_ACTION_STORE"
+class_name = "EmailActionStore"
+
+[[durable_objects.bindings]]
+name = "AI_DAILY_RATE_LIMIT_STORE"
+class_name = "AIRateLimitStore"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GuestTrialCounter"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["EmailActionStore"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["AIRateLimitStore"]
