@@ -12,6 +12,7 @@ output="$pages_dir/dist"
 
 mkdir -p "$output"
 cp -R "$app_root/www/." "$output/"
+cp "$pages_dir/_headers" "$output/_headers"
 for bundle in "$output"/assets/{index,web,highlight,katex,markdown}-*.js; do
   [ -e "$bundle" ] || continue
   if [ ! -f "$app_root/www/assets/$(basename "$bundle")" ]; then

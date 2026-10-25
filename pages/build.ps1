@@ -15,6 +15,7 @@ try {
 
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 Copy-Item -Path (Join-Path $appRoot "www\*") -Destination $output -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "_headers") -Destination (Join-Path $output "_headers") -Force
 $currentAssets = Join-Path $appRoot "www\assets"
 $staleBundles = Get-ChildItem -Path (Join-Path $output "assets") -Filter "*.js" -File |
   Where-Object {
