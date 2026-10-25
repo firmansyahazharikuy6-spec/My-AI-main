@@ -12,6 +12,15 @@ import {
   validateImagePromptPlan,
 } from "../../js/image-prompts.js";
 import { CanvaError, createPresentation, finishOAuth, startOAuth } from "./canva.ts";
+import {
+  corsHeaders as sharedCorsHeaders,
+  HTTP_TIMEOUTS,
+  isAllowedOrigin,
+  jsonResponse as sharedJsonResponse,
+  makeUpstreamRequest as createUpstreamRequest,
+  streamResponse as createStreamResponse,
+} from "./http.js";
+export { isAllowedOrigin } from "./http.js";
 
 const PROVIDERS = ["openrouter", "gemini", "groq", "nvidia", "anthropic", "moonshot"];
 const PROVIDER_KEY_NAMES = [...PROVIDERS, "monid", "explorium"];
@@ -43,9 +52,9 @@ const GEMINI_IMAGE_MODELS = [
 ];
 const GEMINI_IMAGE_MAX_RATE_LIMIT_RETRIES = 2;
 const GEMINI_IMAGE_CIRCUIT_BREAKER_MS = 60_000;
-const UPSTREAM_CONNECT_TIMEOUT_MS = 30_000;
-const UPSTREAM_IDLE_TIMEOUT_MS = 30_000;
-const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+const UPSTREAM_CONNECT_TIMEOUT_MS = HTTP_TIMEOUTS.workerConnectMs;
+const UPSTREAM_IDLE_TIMEOUT_MS = HTTP_TIMEOUTS.upstreamIdleMs;
+const SSE_HEARTBEAT_INTERVAL_MS = HTTP_TIMEOUTS.sseHeartbeatMs;
 const MYAI_CORE_INSTRUCTIONS = `You are MyAI, a helpful conversational assistant.
 Follow these guidelines for every response:
 - CONVERSATIONAL RELEVANCE: Answer the latest user message directly and in context. Match the user's language and level of detail. For greetings or brief openings, respond warmly and briefly, then ask what they would like help with. Do not introduce unrelated technical topics, code, percentages, or mathematics. Do not pad simple conversational answers with headings or lists.
@@ -59,17 +68,6 @@ Follow these guidelines for every response:
 - LANGUAGE: Reply in the same language as the user's latest request. For Indonesian requests, use natural Bahasa Indonesia. Never begin with a generic acknowledgment such as "Alright, I understand".
 - HTML ARTIFACT LANGUAGE: When generating HTML, CSS, or JavaScript artifacts, write all visible titles, headings, labels, buttons, and explanatory text in Bahasa Indonesia for Indonesian requests. Keep code syntax, identifiers, and requested quoted text unchanged when necessary.
 - AUTOMATIC ACTION ROUTER: Use structured output only when the latest request explicitly needs an application artifact such as a presentation, document, spreadsheet, or image. The frontend validates those task-specific formats. For ordinary questions and conversation, answer naturally in Markdown or plain text without JSON.`;
-const CORS_ALLOWED_ORIGINS = new Set([
-  "https://myai-v3-firmansyah.pages.dev",
-  "https://b1259143.myai-v3-firmansyah.pages.dev",
-  "http://localhost:4173",
-  "http://127.0.0.1:4173",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "capacitor://localhost",
-]);
-const APP_ORIGIN = "https://myai-v3-firmansyah.pages.dev";
-
 let cachedJwks = null;
 let cachedJwksExpiry = 0;
 let importedKeys = new Map();
@@ -192,51 +190,21 @@ export function isImageEditRequest(prompt) {
 }
 
 function corsHeaders(request = null) {
-  const origin = request?.headers?.get("Origin") || "";
-  const allowedOrigin = origin && isAllowedOrigin(origin) ? origin : "";
-  return {
-    ...(allowedOrigin ? { "Access-Control-Allow-Origin": allowedOrigin } : {}),
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id",
-    "Access-Control-Expose-Headers": "X-Guest-Remaining",
-    "Access-Control-Max-Age": "86400",
-    Vary: "Origin",
-  };
-}
-
-function jsonResponse(body, status = 200, request = null) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      ...corsHeaders(request),
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-    },
+  return sharedCorsHeaders(request, {
+    allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id",
+    exposeHeaders: "X-Guest-Remaining",
+    maxAge: "86400",
   });
 }
 
-export function isAllowedOrigin(origin, env = {}) {
-  if (!origin) return true;
-  const configuredOrigins = String(env.APP_ORIGINS || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const candidates = new Set([APP_ORIGIN, ...configuredOrigins, ...CORS_ALLOWED_ORIGINS]);
-  if (candidates.has(origin)) return true;
-  try {
-    const url = new URL(origin);
-    if (url.protocol === "capacitor:") {
-      return url.hostname === "localhost" && !url.port;
-    }
-    if (url.protocol === "https:"
-      && (url.hostname === "myai-v3-firmansyah.pages.dev"
-        || url.hostname.endsWith(".myai-v3-firmansyah.pages.dev"))) return true;
-    return url.protocol === "http:"
-      && ["localhost", "127.0.0.1"].includes(url.hostname)
-      && (!url.port || ["4173", "5173"].includes(url.port));
-  } catch {
-    return false;
-  }
+function jsonResponse(body, status = 200, request = null) {
+  return sharedJsonResponse(body, status, request, {
+    cors: {
+      allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id",
+      exposeHeaders: "X-Guest-Remaining",
+      maxAge: "86400",
+    },
+  });
 }
 
 function rejectDisallowedOrigin() {
@@ -1071,27 +1039,6 @@ export async function validateChatBody(body, keys) {
   };
 }
 
-function makeUpstreamRequest(request) {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, UPSTREAM_CONNECT_TIMEOUT_MS);
-  const abortFromRequest = () => controller.abort(request.signal.reason);
-  if (request.signal?.aborted) abortFromRequest();
-  else request.signal?.addEventListener("abort", abortFromRequest, { once: true });
-  return {
-    controller,
-    get timedOut() { return timedOut; },
-    clearConnectTimeout() { clearTimeout(timeout); },
-    cleanup() {
-      clearTimeout(timeout);
-      request.signal?.removeEventListener("abort", abortFromRequest);
-    },
-  };
-}
-
 async function providerFetch(url, options, provider) {
   try {
     return await fetch(url, options);
@@ -1252,14 +1199,15 @@ export function streamResponse(
       }
     },
   });
-  return new Response(stream, {
+  return createStreamResponse(stream, {
     status: response.status,
-    headers: {
-      ...corsHeaders(request),
-      "Content-Type": response.headers.get("Content-Type") || "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "X-Accel-Buffering": "no",
+    request,
+    cors: {
+      allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id",
+      exposeHeaders: "X-Guest-Remaining",
+      maxAge: "86400",
     },
+    contentType: response.headers.get("Content-Type") || "text/event-stream; charset=utf-8",
   });
 }
 
@@ -1289,7 +1237,7 @@ function geminiRequestBody(input) {
 
 async function sendGeminiRequest(input, key, request) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`;
-  const upstreamRequest = makeUpstreamRequest(request);
+  const upstreamRequest = createUpstreamRequest(request, UPSTREAM_CONNECT_TIMEOUT_MS, false);
   let response;
   try {
     response = await providerFetch(url, {
@@ -1348,7 +1296,7 @@ async function sendOpenAIRequest(request, input, key) {
     headers["X-Title"] = "MyAI";
   }
   const body = openAIRequestBody(input);
-  const upstreamRequest = makeUpstreamRequest(request);
+  const upstreamRequest = createUpstreamRequest(request, UPSTREAM_CONNECT_TIMEOUT_MS, false);
   let response;
   try {
     response = await providerFetch(url, {

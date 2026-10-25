@@ -1,3 +1,11 @@
+import {
+  corsHeaders as sharedCorsHeaders,
+  HTTP_TIMEOUTS,
+  jsonResponse as sharedJsonResponse,
+  makeUpstreamRequest,
+  streamResponse as createStreamResponse,
+} from "./http.js";
+
 const GATEWAY_PROVIDERS = {
   gemini: { label: "Google Gemini · Gateway", keyName: "GEMINI_API_KEY" },
   groq: { label: "Groq · Gateway", keyName: "GROQ_API_KEY" },
@@ -19,11 +27,11 @@ const MAX_AUTOMATIC_FALLBACK_MODELS = 5;
 const GATEWAY_CATALOG_TTL_MS = 5 * 60 * 1000;
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_CHARS = 1_500_000;
-const UPSTREAM_CONNECT_TIMEOUT_MS = 12_000;
 const MAX_PROVIDER_ATTEMPTS = 2;
 const PROVIDER_RETRY_BACKOFF_MS = 1_000;
-const UPSTREAM_IDLE_TIMEOUT_MS = 30_000;
-const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+const UPSTREAM_CONNECT_TIMEOUT_MS = HTTP_TIMEOUTS.gatewayConnectMs;
+const UPSTREAM_IDLE_TIMEOUT_MS = HTTP_TIMEOUTS.upstreamIdleMs;
+const SSE_HEARTBEAT_INTERVAL_MS = HTTP_TIMEOUTS.sseHeartbeatMs;
 const catalogCache = new Map();
 const modelHealth = new Map();
 const PROMPT_OPTIMIZER_INSTRUCTIONS = [
@@ -43,14 +51,6 @@ export function clearGatewayCatalogCache(provider) {
     modelHealth.clear();
   }
 }
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-  "Cache-Control": "no-store",
-  "X-Content-Type-Options": "nosniff",
-};
-
 class GatewayError extends Error {
   constructor(status, message) {
     super(message);
@@ -182,17 +182,18 @@ function currentModelHealth(provider, modelId) {
 }
 
 function corsHeaders(request) {
-  return {
-    ...CORS_HEADERS,
-    "Access-Control-Allow-Origin": request?.headers?.get("Origin") || "*",
-    Vary: "Origin",
-  };
+  return sharedCorsHeaders(request, {
+    cacheControl: "no-store",
+    contentTypeOptions: "nosniff",
+  });
 }
 
 function jsonResponse(body, status = 200, request) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders(request), "Content-Type": "application/json; charset=utf-8" },
+  return sharedJsonResponse(body, status, request, {
+    cors: {
+      cacheControl: "no-store",
+      contentTypeOptions: "nosniff",
+    },
   });
 }
 
@@ -1063,41 +1064,13 @@ export function streamResponse(
       }
     },
   });
-  return new Response(stream, {
-    headers: {
-      ...corsHeaders(metrics.request),
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "X-Accel-Buffering": "no",
+  return createStreamResponse(stream, {
+    request: metrics.request,
+    cors: {
+      cacheControl: "no-store",
+      contentTypeOptions: "nosniff",
     },
   });
-}
-
-function makeUpstreamRequest(request) {
-  let controller;
-  let timeout;
-  let abortFromRequest;
-  const start = () => {
-    controller = new AbortController();
-    timeout = setTimeout(() => controller.abort(new DOMException("Provider connection timed out.", "TimeoutError")), UPSTREAM_CONNECT_TIMEOUT_MS);
-    abortFromRequest = () => controller.abort(request.signal.reason);
-    if (request.signal?.aborted) abortFromRequest();
-    else request.signal?.addEventListener("abort", abortFromRequest, { once: true });
-  };
-  const stop = () => {
-    clearTimeout(timeout);
-    request.signal?.removeEventListener("abort", abortFromRequest);
-  };
-  start();
-  return {
-    get controller() { return controller; },
-    clearConnectTimeout() { clearTimeout(timeout); },
-    reset() {
-      stop();
-      start();
-    },
-    cleanup: stop,
-  };
 }
 
 function waitForProviderRetry(signal, delayMs) {
@@ -1167,7 +1140,7 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
     if (selectedModel && hasImages && !selectedModel.imageSupport) {
       throw new GatewayError(400, `Model ${selectedModel.name} tidak mencantumkan dukungan input gambar.`);
     }
-    const upstreamRequest = makeUpstreamRequest(request);
+    const upstreamRequest = makeUpstreamRequest(request, UPSTREAM_CONNECT_TIMEOUT_MS);
     const fallbackProviders = input.webSearch
       ? GATEWAY_FALLBACK_PRIORITY.filter((provider) => ["gemini", "openrouter"].includes(provider))
       : GATEWAY_FALLBACK_PRIORITY;

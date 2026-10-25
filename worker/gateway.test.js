@@ -1456,6 +1456,13 @@ test("gateway handles preflight and echoes the local preview origin", async () =
   assert.equal(response.status, 204);
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), "http://127.0.0.1:4173");
   assert.equal(response.headers.get("Access-Control-Allow-Headers"), "Content-Type, Authorization, X-Requested-With");
+
+  const disallowed = await handleGatewayRequest(new Request("https://worker.test/api/gateway", {
+    method: "OPTIONS",
+    headers: { Origin: "https://attacker.example" },
+  }), {});
+  assert.equal(disallowed.status, 204);
+  assert.equal(disallowed.headers.get("Access-Control-Allow-Origin"), null);
 });
 
 test("gateway rejects audio and video payloads with a transcription instruction", async () => {
