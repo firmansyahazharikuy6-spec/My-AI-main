@@ -2,14 +2,13 @@
 
 const { getAuth } = require("firebase-admin/auth");
 const { initializeApp } = require("firebase-admin/app");
-const { defineSecret, defineString } = require("firebase-functions/params");
+const { defineSecret } = require("firebase-functions/params");
 const { onRequest } = require("firebase-functions/v2/https");
 
 initializeApp();
 
 const REGION = "us-central1";
 const PROVIDER_KEYS = defineSecret("AI_PROVIDER_KEYS");
-const AUTHORIZED_EMAILS = defineString("AUTHORIZED_EMAILS", { default: "" });
 const PROVIDERS = ["gemini", "groq", "openrouter", "nvidia", "modelscope", "deepseek", "llm7"];
 const OPENAI_ENDPOINTS = {
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
@@ -71,16 +70,9 @@ async function requireAuthorizedUser(req) {
     throw new HttpError(401, "Sesi Firebase tidak valid. Keluar lalu masuk kembali.");
   }
 
-  const allowed = new Set(
-    AUTHORIZED_EMAILS.value().split(",").map((email) => email.trim().toLowerCase()).filter(Boolean)
-  );
-  if (!allowed.size) {
-    throw new HttpError(503, "Admin belum mengatur AUTHORIZED_EMAILS pada Firebase Functions.");
-  }
-
-  const email = typeof decoded.email === "string" ? decoded.email.toLowerCase() : "";
-  if (!decoded.email_verified || !allowed.has(email)) {
-    throw new HttpError(403, "Akun Google ini belum diizinkan memakai API AI server.");
+  const provider = decoded.firebase?.sign_in_provider;
+  if (!decoded.email_verified || !["google.com", "github.com"].includes(provider)) {
+    throw new HttpError(403, "API AI server hanya menerima akun Google atau GitHub yang sudah terverifikasi.");
   }
 }
 

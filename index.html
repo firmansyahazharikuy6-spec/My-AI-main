@@ -56,25 +56,6 @@
     <button id="closeLogin" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
     <h2 data-i18n="welcome">Welcome to MyAI</h2>
     <p class="muted" data-i18n-dynamic="accountDescription">Create an account or sign in to sync your chats and settings.</p>
-    <div class="auth-tabs" role="tablist" aria-label="Account action">
-      <button id="authSignInTab" class="auth-tab active" type="button" role="tab" aria-selected="true">Sign in</button>
-      <button id="authSignUpTab" class="auth-tab" type="button" role="tab" aria-selected="false">Create account</button>
-    </div>
-    <form id="emailAuthForm" class="auth-form">
-      <label for="authEmail">Email</label>
-      <input id="authEmail" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com" />
-      <label for="authPassword">Password</label>
-      <input id="authPassword" type="password" autocomplete="current-password" required minlength="6" maxlength="128" />
-      <label id="confirmPasswordLabel" class="hidden" for="authConfirmPassword">Confirm password</label>
-      <input id="authConfirmPassword" class="hidden" type="password" autocomplete="new-password" minlength="6" maxlength="128" />
-      <button id="emailAuthSubmit" class="btn primary block" type="submit">Sign in with email</button>
-      <button id="forgotPassword" class="text-button" type="button">Forgot password?</button>
-    </form>
-    <section id="emailVerificationActions" class="email-verification-actions hidden" aria-live="polite">
-      <p id="emailVerificationMessage">Check your email to verify your account before continuing.</p>
-      <button id="resendVerificationEmail" class="text-button" type="button">Resend verification email</button>
-      <button id="refreshEmailVerification" class="text-button" type="button">I've verified — continue</button>
-    </section>
     <div class="auth-divider"><span>or continue with</span></div>
     <div class="auth-social-buttons">
       <button id="loginGoogle" class="btn ghost block auth-provider-btn" type="button">
@@ -93,29 +74,6 @@
         <span id="loginGithubLabel">Continue with GitHub</span>
       </button>
     </div>
-    <section class="phone-auth">
-      <h3>Continue with phone</h3>
-      <form id="phoneAuthForm" class="auth-form">
-        <label for="authPhoneCountry">Country</label>
-        <select id="authPhoneCountry" aria-label="Country for phone number">
-          <option value="ID" selected>Indonesia (+62)</option>
-          <option value="US">United States (+1)</option>
-          <option value="SG">Singapore (+65)</option>
-          <option value="MY">Malaysia (+60)</option>
-          <option value="AU">Australia (+61)</option>
-          <option value="GB">United Kingdom (+44)</option>
-        </select>
-        <label for="authPhone">Phone number</label>
-        <input id="authPhone" type="tel" inputmode="numeric" autocomplete="tel" required maxlength="20" placeholder="812 3456 7890" />
-        <button id="sendPhoneCode" class="btn ghost block" type="submit">Send verification code</button>
-      </form>
-      <form id="phoneCodeForm" class="auth-form hidden">
-        <label for="authPhoneCode">Verification code</label>
-        <input id="authPhoneCode" type="text" inputmode="numeric" autocomplete="one-time-code" required minlength="6" maxlength="10" />
-        <button class="btn primary block" type="submit">Verify and continue</button>
-      </form>
-      <div id="phoneRecaptcha"></div>
-    </section>
     <p id="loginError" class="login-error hidden" role="alert"></p>
   </dialog>
   <div class="app">
@@ -228,7 +186,7 @@
           </div>
           <div class="composer-toolbar-row composer-toolbar-secondary">
             <div class="prompt-helper-actions">
-              <button id="promptHelperBtn" class="prompt-helper-btn" type="button" title="Improve prompt with Groq" aria-label="Rapikan prompt">
+              <button id="promptHelperBtn" class="prompt-helper-btn" type="button" title="Improve prompt with NVIDIA NIM" aria-label="Rapikan prompt">
                 <span aria-hidden="true">✨</span>
                 <span id="promptHelperLabel" data-i18n="promptImproveShort">Improve</span>
                 <span id="promptHelperSpinner" class="prompt-helper-spinner hidden" aria-hidden="true"></span>
@@ -544,7 +502,8 @@
       <button id="testAllProviders" class="btn primary" type="button">Tes semua provider</button>
     </div>
     <p id="providerHealthSummary" class="api-key-status" role="status" aria-live="polite"></p>
-    <p class="muted">Tes chat mengirim prompt pendek, mencatat token yang dilaporkan, dan dapat memakai kuota atau biaya provider. Tes Pollinations dan Gemini Image membuat gambar uji yang juga dapat memakai kuota. Monid diuji dengan pencarian discover; tidak menjalankan endpoint berbayar.</p>
+    <p class="muted">Chat teks non-pencarian, termasuk Rapikan/Saran, diprioritaskan ke NVIDIA NIM jika secret dan model yang sesuai tersedia. Pencarian web dan pembuatan gambar memakai provider khusus bila NIM tidak mendukung kapabilitasnya. Pemakaian NIM mengikuti kuota dan billing akun NVIDIA. Saat kuota NIM habis, gateway hanya mencoba kandidat fallback berakses FREE yang tersedia.</p>
+    <p class="muted">Tes chat mengirim prompt pendek, mencatat token yang dilaporkan, dan dapat memakai kuota atau biaya provider. Gemini diuji sebagai satu provider; fitur gambar memakai secret Gemini yang sama. Tes Pollinations membuat gambar uji dan dapat memakai kuota. Monid diuji dengan pencarian discover; tidak menjalankan endpoint berbayar.</p>
     <div id="apiProviderList" class="api-provider-list" aria-label="Status provider AI"></div>
     <p class="muted">Key hanya dapat diatur oleh admin di Cloudflare Worker; browser tidak menyimpan atau mengirim nilai key. Monid adalah layanan data tools dan diperiksa saat digunakan.</p>
   </dialog>

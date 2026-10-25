@@ -1,6 +1,6 @@
 # MyAI — AI Chat Pribadimu (mirip ChatGPT / Claude / Gemini)
 
-Website chat AI pribadi dengan frontend statis, Firebase Authentication/Firestore, dan backend AI Cloudflare Workers. AI guest tidak memerlukan login atau API key dari pengguna; jawaban dibatasi, tetapi tarif/kuota pada key provider yang dikelola aplikasi tetap dapat berlaku. Akun dapat menggunakan email/password, nomor telepon, Google, atau GitHub. Akses AI terkelola tetap dibatasi oleh daftar email yang diizinkan admin.
+Website chat AI pribadi dengan frontend statis, Firebase Authentication/Firestore, dan backend AI Cloudflare Workers. AI guest tidak memerlukan login atau API key dari pengguna; jawaban dibatasi, tetapi tarif/kuota pada key provider yang dikelola aplikasi tetap dapat berlaku. Login yang tersedia adalah Google dan GitHub. Semua akun Google/GitHub dengan email terverifikasi dapat memakai API AI tanpa allowlist alamat email, dengan rate limit per UID.
 
 ## Aplikasi Android dan iOS
 
@@ -27,7 +27,7 @@ npm run cap:open:android
 npm run cap:open:ios
 ```
 
-`cap:sync` membangun web app ke `www/`, menyalin aset ke platform Capacitor, dan menambahkan deklarasi izin kamera/mikrofon untuk live chat. Login Google, GitHub, dan Phone pada aplikasi native menggunakan plugin Firebase Authentication dan tetap menyinkronkan sesi dengan Firebase JavaScript SDK. Login email/password menggunakan Firebase Web SDK. Worker AI hanya menerima akun Google, GitHub, atau email/password yang alamat emailnya terverifikasi dan tercantum di `AUTHORIZED_EMAILS`; akun Phone tanpa email tertaut tidak memenuhi kebijakan tersebut. Worker mengizinkan origin Capacitor lokal untuk permintaan dari aplikasi terpasang. Uji login, izin perangkat, upload file, dan live video di perangkat asli sebelum rilis. Build dan uji native belum dijalankan di workspace ini karena Node.js/npm serta toolchain Android/Xcode tidak tersedia.
+`cap:sync` membangun web app ke `www/`, menyalin aset ke platform Capacitor, dan menambahkan deklarasi izin kamera/mikrofon untuk live chat. Login Google dan GitHub pada aplikasi native menggunakan plugin Firebase Authentication dan tetap menyinkronkan sesi dengan Firebase JavaScript SDK. Hanya akun Google/GitHub terverifikasi yang dapat memakai API AI; semua email yang memenuhi syarat diterima tanpa allowlist, dan request dibatasi rate limit per UID. Worker mengizinkan origin Capacitor lokal untuk permintaan dari aplikasi terpasang. Uji login, izin perangkat, upload file, dan live video di perangkat asli sebelum rilis.
 
 Model yang didukung:
 
@@ -53,7 +53,7 @@ npm run worker:dev
 npm run dev
 ```
 
-Untuk AI chat lokal, simpan secret provider di `worker/.dev.vars` (file ini diabaikan Git), misalnya `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, atau `NVIDIA_API_KEY`. Isi nilai secret secara lokal; jangan pernah memasukkan API key ke browser atau meng-commit file tersebut. Jika Worker tidak berjalan, UI akan menandai provider tidak dapat dijangkau. Untuk deploy, daftarkan secret dengan `npm run worker:secret -- GROQ_API_KEY` atau `npx wrangler secret put GROQ_API_KEY --config worker/wrangler.toml`.
+Untuk AI chat lokal, simpan secret provider di `worker/.dev.vars` (file ini diabaikan Git), misalnya `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`, `CLAUDE_API_KEY`, atau `KIMI_API_KEY`. Isi nilai secret secara lokal; jangan pernah memasukkan API key ke browser atau meng-commit file tersebut. Jika Worker tidak berjalan, UI akan menandai provider tidak dapat dijangkau. Untuk deploy, daftarkan secret dengan `npm run worker:secret -- CLAUDE_API_KEY` atau `npx wrangler secret put CLAUDE_API_KEY --config worker/wrangler.toml`.
 
 Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu dev dan preview dikunci ke port 4173 agar riwayat chat, Tree Concept, dan telemetri tetap berada pada origin yang sama.
 
@@ -65,12 +65,12 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 - Mode Umum, Coding, Flash, Pro, dan Max memilih model rekomendasi berbeda jika katalog menyediakan pilihan yang sesuai. Pilihan manual disimpan per mode; model aktif juga disimpan berdasarkan ID model agar pilihan tetap terikat saat katalog dimuat ulang.
 - Semua chat model dan katalog server dipanggil melalui Cloudflare Worker; browser tidak mengunduh bobot model atau mengirim request chat langsung ke provider.
 - Localhost memakai proxy Vite menuju Worker lokal; produksi memakai route same-origin `/api` di Cloudflare Pages.
-- Login dengan email terverifikasi yang tercantum di `AUTHORIZED_EMAILS` diperlukan untuk provider Worker.
-- AI guest tersedia tanpa login jika secret provider dan binding rate limit sudah disiapkan di Worker.
+- Akun Google atau GitHub dengan email terverifikasi diperlukan untuk memakai provider Worker; semua alamat email yang memenuhi syarat dapat login tanpa allowlist.
+- AI guest tersedia tanpa login jika secret provider, binding rate limit, dan konfigurasi Turnstile sudah disiapkan di Worker. Bila tersedia, satu model NVIDIA NIM tier Basic ditampilkan pertama; dua penggunaan AI per kombinasi IP dan ID perangkat dapat menggunakan kuota/billing provider yang dikelola aplikasi.
 - Login otomatis beralih ke redirect jika browser memblokir popup Google.
 - Pemuatan katalog Worker memiliki batas waktu dan menjelaskan gangguan koneksi/DNS tanpa membuat tombol model terus menunggu.
-- Backend memverifikasi token Firebase, provider masuk yang didukung, email terverifikasi, dan allowlist sebelum menerima permintaan.
-- Model Worker mengikuti allowlist dan batas provider. Model berbayar/tarif tak diketahui dapat langsung digunakan tanpa konfirmasi biaya dan dapat menimbulkan tagihan provider.
+- Backend memverifikasi token Firebase, provider masuk yang didukung, dan email terverifikasi sebelum menerima permintaan.
+- Katalog Worker mengikuti konfigurasi model dan batas provider. Model berbayar/tarif tak diketahui dapat langsung digunakan tanpa konfirmasi biaya dan dapat menimbulkan tagihan provider.
 - API key lama dari `localStorage` dibersihkan otomatis saat membuka versi ini.
 
 ## Pemilih model di v3.7
@@ -91,9 +91,9 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 ## AI Gratis tanpa login di v4.0
 
 - Tombol **Mulai Chat Gratis** memilih AI guest server tanpa meminta login atau API key dari pengguna.
-- Admin tetap harus mengatur secret provider AI di Cloudflare Worker dan binding rate limit guest di `worker/wrangler.toml`. Tanpa konfigurasi server tersebut, frontend tidak dapat menjalankan model secara mandiri.
+- Admin harus mengatur secret provider AI, `TURNSTILE_SECRET_KEY`, `TURNSTILE_SITE_KEY`, dan binding rate limit guest di Cloudflare Worker. Tanpa secret Turnstile, route guest ditolak dengan pesan konfigurasi (fail closed).
 - Jika katalog model gagal dimuat, MyAI tetap memilih model guest server sehingga pengguna dapat mencoba fitur gratis dan melihat error yang dikembalikan Worker bila konfigurasi server belum siap.
-- Admin harus menyiapkan secret Gemini atau Groq dan deploy `worker/wrangler.toml` terbaru, termasuk rate limit guest 5 request per 60 detik.
+- Admin harus menyiapkan secret Gemini atau Groq dan deploy `worker/wrangler.toml` terbaru, termasuk rate limit guest 5 request per 60 detik. Atur `TURNSTILE_SITE_KEY` sebagai Worker variable dan simpan secret private menggunakan `npx wrangler secret put TURNSTILE_SECRET_KEY`; daftarkan hostname situs di Cloudflare Turnstile.
 - Guest dibatasi 6.000 karakter dan 512 token jawaban. Fitur gambar menerima satu PNG/JPG/WebP per chat dan memerlukan secret Gemini.
 - Bila Gemini guest terkena kuota atau gagal, Worker mencoba Groq gratis; jika keduanya gagal, aplikasi menampilkan error. Semua penggunaan tetap memerlukan internet.
 - Gambar guest diproses di browser menjadi JPEG kecil, hanya berada di memori tab, dan tidak disimpan pada draft `localStorage`.
@@ -124,9 +124,9 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 ## Prompt helper, keamanan API, dan bahasa UI di v5.36
 
 - Bahasa antarmuka default adalah English; pengguna dapat beralih ke Bahasa Indonesia dari halaman pembuka atau top bar. Pilihan disimpan di perangkat.
-- Tombol ✨ mengirim draft langsung ke route Cloudflare Worker `/api/enhance-prompt`, memakai Groq `openai/gpt-oss-20b` dan tidak mengubah model chat pilihan. Route memerlukan sesi akun, memakai rate limit, serta memiliki batas upstream 4,5 detik dan frontend 4,8 detik. Bahasa hasil mengikuti draft, bukan bahasa UI; hasil terlalu panjang/berulang, membocorkan konteks internal, berbeda bahasa, atau gagal akan memakai template lokal yang mempertahankan draft.
+- Tombol ✨ mengirim draft ke route Cloudflare Worker `/api/enhance-prompt`, memprioritaskan NVIDIA NIM lalu memakai Groq sebagai fallback saat NIM tidak tersedia/gagal. Route memerlukan sesi akun dan rate limit; hasil gambar memakai schema validation serta template lokal jika provider tidak dapat digunakan.
 - Tombol **Saran** meminta tiga alternatif prompt. Respons JSON yang disertai teks penjelas tetap diparse; hasil yang tidak valid, berulang, atau membocorkan konteks internal diganti dengan alternatif lokal. Pilih satu untuk mengganti draft, lalu sunting manual bila perlu.
-- **Saran** memakai model chat cepat yang tersedia (atau template lokal); key provider tetap berada di secret Worker, tidak di browser.
+- **Saran** memakai NVIDIA NIM sebagai provider utama chat (atau template lokal); key provider tetap berada di secret Worker, tidak di browser.
 - Model dan katalog akun dimuat otomatis saat aplikasi memulai atau akun masuk. Tombol pembaruan katalog tetap tersedia sebagai opsi manual, bukan prasyarat untuk memakai model.
 - API key provider tidak boleh ditanam dalam HTML/JavaScript publik. Semua key chat berada di secret Cloudflare Worker; browser hanya mengirim request ke backend terautentikasi.
 - Permintaan REST Gemini mengirim key melalui header API, bukan parameter URL, agar key tidak ikut tercatat di URL request.
@@ -159,8 +159,8 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 - Tombol percakapan suara tampil bulat di sebelah kanan tombol kirim. Dialog suara memiliki avatar animasi dan pilihan bidang: umum, kesehatan, pendidikan, bisnis, teknologi, hukum, keuangan, kreatif, karier, serta kebugaran.
 - Pada v5.11 kamera dapat mengirim cuplikan gambar per giliran ke model vision yang dipilih. Kamera belum didukung dalam sesi Gemini Live di v5.23.
 - Katalog yang kosong menjelaskan apakah API server tidak dapat dijangkau atau belum memiliki provider aktif.
-- API key provider bukan bagian dari frontend: source code hanya memuat Firebase Web config publik. Key Gemini, Groq, dan OpenRouter disimpan sebagai secret Cloudflare Worker (`AI_PROVIDER_KEYS` atau secret provider individual). **Status AI Worker** hanya menampilkan provider yang aktif.
-- Jika tidak ada model, buka **＋ → Status provider AI** dan periksa pesan status; untuk model server, pastikan Worker dapat dijangkau serta admin sudah memasang secret provider dan mengizinkan akun melalui `AUTHORIZED_EMAILS` atau `AUTHORIZED_PHONE_NUMBERS`.
+- API key provider bukan bagian dari frontend: source code hanya memuat Firebase Web config publik. Key Gemini, Groq, OpenRouter, NVIDIA, Claude, dan Kimi disimpan sebagai secret Cloudflare Worker (`AI_PROVIDER_KEYS` atau secret provider individual). **Status AI Worker** hanya menampilkan provider yang aktif.
+- Jika tidak ada model, buka **＋ → Status provider AI** dan periksa pesan status; untuk model server, pastikan Worker dapat dijangkau serta admin sudah memasang secret provider. Semua akun Google/GitHub terverifikasi dapat memakai API, dengan rate limit per UID.
 - Avatar adalah ilustrasi antarmuka animasi, bukan manusia/video yang dibuat AI. Untuk percakapan video/audio real-time dua arah dibutuhkan API/provider yang menyediakan sesi real-time dan konfigurasi backend tambahan.
 
 ## Logo orbital, intro login, dan perbaikan dialog di v5.13
@@ -170,7 +170,7 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 - Intro dibuat dari aset gambar dan animasi CSS; tidak memerlukan file video tambahan.
 - Dialog terpusat dan dibatasi tinggi viewport agar tetap dapat digunakan pada layar pendek/kecil. Untuk pengujian lokal, gunakan `http://localhost`, bukan `http://127.0.0.1`; hostname domain produksi tetap harus diizinkan pada Authorized domains Firebase.
 - Pada versi sebelum v5.23, voice chat memakai pengenalan dan sintesis suara browser per giliran; sejak v5.23, tombol percakapan suara memulai sesi audio realtime Gemini Live.
-- Tombol salin mencoba Clipboard API lalu fallback browser; tombol salin dan pratinjau kode ditempatkan sesudah blok kode. File Office dibuat lokal di browser dan PPTX dapat diimpor manual ke Canva; belum ada integrasi API Canva karena API resmi serta akses/otorisasi akun tidak disediakan proyek ini.
+- Tombol salin mencoba Clipboard API lalu fallback browser; tombol salin dan pratinjau kode ditempatkan sesudah blok kode. DOCX/XLSX dan ekspor PPTX manual untuk Canva dibuat di browser; desain Canva otomatis tetap memakai Canva Connect server-side.
 
 ## Integrasi Monid dan Gemini Live realtime di v5.25
 
@@ -194,11 +194,11 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 
 ## Katalog, guest, dan ekspor di v5.7
 
-- Sebelum login, pengguna mendapat **maksimal dua jawaban AI** per alamat IP. Penghitung persisten memakai Durable Object; tidak ada reset otomatis. Jika seluruh provider gagal sebelum memberikan respons, Worker mengembalikan jatah. Masuk Google untuk melanjutkan. Deploy Worker terbaru beserta binding/migrasi `GUEST_TRIAL_COUNTER` sebelum mengaktifkan perubahan ini.
-- Daftar guest memilih model chat tier dasar dari katalog aktual Gemini/Groq dan sebagian model OpenRouter yang katalog harganya menyatakan gratis. Model Gemini/Groq memakai key aplikasi sehingga tarif/kuota provider tetap dapat berlaku; hanya model OpenRouter dengan harga prompt/completion/request nol yang ditandai gratis terverifikasi.
+- Sebelum login, pengguna mendapat **maksimal dua penggunaan AI** (chat atau transkripsi) per kombinasi IP dan ID perangkat acak yang disimpan di `localStorage`. Turnstile diverifikasi server-side untuk setiap route guest; request ditolak jika secret/site key belum dikonfigurasi. Rate limit 5 request per menit tetap diterapkan pada IP dan juga pada ID perangkat. Penghitung persisten memakai Durable Object; tidak ada reset otomatis. Jika provider gagal sebelum menghasilkan jawaban/teks transkripsi, Worker mengembalikan jatah. Masuk Google untuk melanjutkan. Deploy Worker terbaru beserta binding/migrasi `GUEST_TRIAL_COUNTER` sebelum mengaktifkan perubahan ini.
+- Daftar guest memilih satu model NVIDIA NIM tier Basic terlebih dahulu, lalu Gemini/Groq dan sebagian model OpenRouter yang katalog harganya menyatakan gratis. Guest dibatasi dua penggunaan AI per kombinasi IP/perangkat; pemakaian NVIDIA/Gemini/Groq memakai key aplikasi dan dapat memakai kuota atau menimbulkan biaya provider. Hanya model OpenRouter dengan harga prompt/completion/request nol yang ditandai gratis terverifikasi. NIM hanya ditambahkan ke katalog guest jika model Basic tersedia dan tidak sedang ditandai kuota/saldo terbatas.
 - Kategori **Free / Basic / Pro / Max** mengelompokkan model berdasarkan harga/kinerja dan **bukan paket langganan atau hak akses berbayar MyAI**. Harga model di luar Free tetap mengikuti provider.
 - Mode AI offline WebGPU telah dihapus. Tidak ada tombol atau alur chat yang mengunduh bobot model ke browser.
-- DOCX, XLSX, dan PPTX menerima format tabel serta tipografi/warna dasar yang lebih teratur. PPTX disiapkan untuk diimpor ke Canva; integrasi Canva langsung belum tersedia.
+- DOCX dan XLSX menerima format tabel serta tipografi/warna dasar yang lebih teratur. Presentasi PowerPoint dapat dibuat otomatis melalui Canva Connect atau diunduh sebagai PPTX modern-gold dua slide untuk diimpor manual ke Canva.
 - Pages menambahkan `nosniff`, kebijakan referrer, dan pembatasan izin browser yang tetap mengizinkan mikrofon satu-origin. CSP sengaja tidak ditambahkan karena aplikasi memuat Firebase dan pustaka ekspor dari CDN.
 - Pada localhost, API diarahkan langsung ke Worker supaya tidak melewati preflight Pages gateway yang saat ini bermasalah; produksi tetap memakai route same-origin `/api`.
 
@@ -210,13 +210,18 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 
 ## Multi-model AI Gateway
 
-- Worker terautentikasi menyediakan satu endpoint `POST /gateway` untuk Gemini, Groq, NVIDIA NIM, dan OpenRouter. Masing-masing adapter memakai format request/auth provider yang sesuai; katalog model diambil dari endpoint provider dan di-cache singkat di Worker.
-- Secret yang didukung adalah `GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY` (alias `NVIDIA_NIM_API_KEY`), dan `OPENROUTER_API_KEY`, atau key provider yang sama di JSON secret `AI_PROVIDER_KEYS`. Wrangler meminta nilai secret secara interaktif; jangan menaruh key di source, `.env`, frontend, atau chat.
-- Panel **Status AI Worker** membedakan secret terpasang dari koneksi yang sudah diuji. **Tes koneksi** dan **Tes semua provider** mengirim prompt chat singkat, menguji Monid lewat `discover`, serta meminta satu gambar kecil dari Pollinations dan Gemini Image. Hasil menampilkan status, latensi, model, dan token yang benar-benar dilaporkan; uji gambar dapat memakai kuota dan tidak menyimpan gambarnya. Pollinations tidak melaporkan token, dan Monid bukan provider chat.
-- Saat model gagal, Worker membatasi retry ke HTTP 429 dan 5xx. Aplikasi tidak mengganti provider secara diam-diam: pengguna diminta mengonfirmasi provider alternatif sebelum konteks chat dikirim ke provider tersebut.
-- NVIDIA NIM memakai `https://integrate.api.nvidia.com/v1` dengan Bearer token serta `/models` dan `/chat/completions`, sesuai [referensi resmi NVIDIA NIM](https://docs.api.nvidia.com/nim/reference/meta-muse-glimmer-30b-infer). Adapter lainnya mengikuti dokumentasi resmi [Gemini](https://ai.google.dev/api/generate-content), [Groq](https://console.groq.com/docs/api-reference#chat-create), [OpenRouter](https://openrouter.ai/docs/api_reference/overview), dan [Monid](https://docs.monid.ai/). Model Claude, bila tersedia, dipanggil melalui OpenRouter menggunakan `OPENROUTER_API_KEY`; aplikasi tidak lagi memakai Anthropic API key secara langsung. Dokumentasi Pollinations tidak berhasil diverifikasi; tesnya memakai endpoint gambar yang sudah ada di aplikasi dan tetap **BUTUH VERIFIKASI resmi**.
-- Endpoint terautentikasi `POST /health` menerima `{ "providers": ["groq"] }` atau tanpa daftar untuk menguji seluruh layanan di panel. Chat memakai model yang dipilih dari katalog provider dan batas 8 token; Monid hanya melakukan discover, sedangkan tes engine gambar membuat satu gambar kecil. Respons hanya berisi status, latensi, model, dan usage yang dilaporkan. Tidak ada key atau respons upstream mentah yang dikirim ke browser.
-- Semua panggilan gateway memerlukan sesi Firebase yang diizinkan melalui `AUTHORIZED_EMAILS` atau `AUTHORIZED_PHONE_NUMBERS` dan dibatasi rate limit per UID akun. Biaya serta kuota tetap mengikuti model/provider; OpenRouter free ditandai berdasarkan data harga katalog. Model berbayar tidak lagi meminta konfirmasi sebelum digunakan.
+- Arsitektur inference menggunakan alur **Browser → Cloudflare Pages Functions → Cloudflare Worker → provider upstream**. Pages Functions mem-proxy request/stream; Worker mengelola autentikasi, katalog/cache, adapter protokol, dan routing berdasarkan provider/model yang dipilih pengguna. Worker tidak mengalihkan request secara diam-diam ke NVIDIA; NVIDIA NIM dijalankan oleh layanan NVIDIA, bukan di-host di Worker MyAI.
+- Worker terautentikasi menyediakan satu endpoint `POST /gateway` untuk Gemini, Groq, NVIDIA NIM, OpenRouter, Anthropic Claude, dan Moonshot Kimi. Masing-masing adapter memakai format request/auth provider yang sesuai; katalog model diambil dari endpoint provider dan di-cache singkat di Worker.
+- Secret yang didukung adalah `GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY` (alias `NVIDIA_NIM_API_KEY`), `OPENROUTER_API_KEY`, `CLAUDE_API_KEY` (alias `ANTHROPIC_API_KEY`), dan `KIMI_API_KEY` (alias `MOONSHOT_API_KEY`), atau key provider yang sama di JSON secret `AI_PROVIDER_KEYS`. `PREMIUM_ALLOWED_UIDS` adalah daftar UID Firebase yang dipisahkan koma dan dikonfigurasi sebagai Worker variable untuk memberi akses model premium; tanpa UID yang cocok, model premium ditolak backend. Jangan menaruh API key di source, `.env`, frontend, atau chat.
+- Panel **Status AI Worker** membedakan secret terpasang dari koneksi yang sudah diuji. **Tes koneksi** dan **Tes semua provider** mengirim prompt chat singkat, menguji Monid lewat `discover`, serta meminta satu gambar kecil dari Pollinations. Gemini Image memakai secret dan status provider Google Gemini yang sama; tidak ditampilkan sebagai server/provider terpisah. Tes Pollinations dapat memakai kuota dan tidak menyimpan gambarnya. Pollinations tidak melaporkan token, dan Monid bukan provider chat.
+- Dropdown dapat merekomendasikan model NVIDIA NIM sebagai pilihan awal bila tersedia pada tier aktif; pilihan provider/model tersebut tetap dikirim secara eksplisit oleh UI dan pilihan manual pengguna per mode tetap disimpan. Backend memakai provider/model yang dipilih, termasuk untuk helper prompt dan input vision yang didukung; NVIDIA tidak menggantikan provider lain secara otomatis. Pencarian web tetap memakai Gemini/OpenRouter yang mendukung grounding, sedangkan pembuatan gambar memakai engine gambar khusus karena NIM gateway ini digunakan untuk chat/vision, bukan image generation. Stream melaporkan provider/model aktual; badge NVIDIA/Groq tidak menampilkan latency atau throughput untuk respons di bawah 100 ms. Biaya dan kuota NIM mengikuti akun NVIDIA.
+- Jika provider mengembalikan HTTP 402/429, Worker dapat mencoba maksimal lima kandidat model FREE yang terverifikasi dari katalog aktif provider; kandidat fallback tanpa verifikasi katalog tidak digunakan. Stream mengidentifikasi provider dan model pengganti, dan UI memberi tahu pengguna sebelum menampilkan jawaban fallback. Harga nol OpenRouter harus diverifikasi dari katalog; penggunaan key Gemini/Groq/NVIDIA/provider lain tetap mengikuti kuota dan billing akun masing-masing.
+- Semua route pemakaian AI login menggunakan satu tabel konfigurasi `AI_ROUTE_LIMITS` di Worker, Cloudflare Rate Limiting binding `AI_RATE_LIMITER` untuk batas per menit, dan Durable Object `AI_DAILY_RATE_LIMIT_STORE` untuk kuota harian per UID. Batas awal (per menit/per hari UTC): chat **5/100**, gambar via chat **5/10**, gambar **5/10**, transkripsi **5/30**, Monid discover **5/20**, inspect **5/30**, run **5/10**, get/status **5/120**, token Live **5/10**, optimasi prompt **5/60**, koneksi Canva **5/10**, presentasi **5/10**, Explorium **5/10**, tes kesehatan provider **5/30**, tes koneksi provider **5/30**, pratinjau email **5/20**, dan email **5/20**. Penolakan batas mengembalikan HTTP 429 dengan pesan Bahasa Indonesia; route terautentikasi tetap menolak pengguna tanpa login dengan HTTP 401.
+- Sebelum setiap `POST /monid/run`, Worker memanggil `/inspect` dan hanya menjalankan endpoint jika `price.amount.value` dan `price.amount.currency` valid serta harga tidak melebihi `MONID_MAX_RUN_COST`. Nilai batas memakai satuan mata uang yang dilaporkan inspect; default `0` di `worker/wrangler.toml` hanya mengizinkan endpoint tanpa biaya. Harga yang hilang/tidak valid atau batas yang tidak dikonfigurasi menghentikan run dengan error, tanpa memanggil `/run`.
+- **Migrasi binding rate limit:** ganti `GUEST_AI_LIMITER` menjadi `AI_RATE_LIMITER` di konfigurasi/deployment Cloudflare dan deploy Worker agar binding runtime baru tersedia. `namespace_id` rate limiter dipertahankan. Migrasi Durable Object `v3` menambahkan `AI_DAILY_RATE_LIMIT_STORE`; pertahankan deklarasi migrasi `v1`/`v2` yang sudah ada. Key per menit kini dipartisi per route, sehingga penghitung route mulai dengan namespace key baru setelah deploy.
+- NVIDIA NIM memakai `https://integrate.api.nvidia.com/v1` dengan Bearer token serta `/models` dan `/chat/completions`, sesuai [referensi resmi NVIDIA NIM](https://docs.api.nvidia.com/nim/reference/meta-muse-glimmer-30b-infer). Adapter lainnya mengikuti dokumentasi resmi [Gemini](https://ai.google.dev/api/generate-content), [Groq](https://console.groq.com/docs/api-reference#chat-create), [OpenRouter](https://openrouter.ai/docs/api_reference/overview), dan [Monid](https://docs.monid.ai/). Claude memakai adapter Anthropic langsung dengan secret `CLAUDE_API_KEY` atau `ANTHROPIC_API_KEY`; Kimi memakai Moonshot dengan `KIMI_API_KEY` atau `MOONSHOT_API_KEY`. Dokumentasi Pollinations tidak berhasil diverifikasi; tesnya memakai endpoint gambar yang sudah ada di aplikasi dan tetap **BUTUH VERIFIKASI resmi**.
+- Endpoint terautentikasi `POST /health` menerima `{ "providers": ["groq"] }` atau tanpa daftar untuk menguji seluruh layanan di panel. Chat memakai model yang dipilih dari katalog provider dan batas 8 token; Monid health check hanya melakukan discover, sedangkan tes engine gambar membuat satu gambar kecil. Respons hanya berisi status, latensi, model, dan usage yang dilaporkan. Tidak ada key atau respons upstream mentah yang dikirim ke browser.
+- Semua panggilan gateway memerlukan sesi Firebase valid dari akun Google/GitHub terverifikasi dan dibatasi rate limit per UID akun; tidak ada allowlist email tunggal. Pengguna login dapat memilih paket FREE, BASIC, PRO, atau MAX. Biaya serta kuota tetap mengikuti model/provider; OpenRouter free ditandai berdasarkan data harga katalog. Model berbayar tidak lagi meminta konfirmasi sebelum digunakan.
 - Chat model gateway dikirim langsung ke route `/gateway` agar tidak melewati parsing ulang route `/chat`; Pages meneruskan stream SSE tanpa membuffer isi jawaban. Cache katalog edge berlaku lima menit, dan konteks chat dibatasi pada 20 pesan/40.000 karakter (100.000 karakter untuk Gemini), selain batas khusus guest.
 - Worker mengizinkan origin Pages produksi/preview (`*.pages.dev`), `localhost`, dan origin tambahan eksplisit `APP_ORIGINS`; preflight mengembalikan `204` dengan metode `GET, POST, OPTIONS`. Upstream chat memiliki timeout 30 detik saat menunggu koneksi dan idle timeout 30 detik setelah stream dimulai, dengan komentar SSE heartbeat setiap 15 detik.
 - Tombol globe **Search web / Cari di web** di composer mengaktifkan pencarian untuk pesan berikutnya. Gemini memakai Google Search grounding dan OpenRouter memakai plugin web; keduanya mengembalikan kutipan sumber yang ditampilkan sebagai tautan di bawah jawaban. Jika tool pencarian gagal sebelum model mulai menjawab, MyAI mencoba ulang tanpa pencarian.
@@ -229,7 +234,7 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 
 - Cukup tulis permintaan biasa, mis. "buatkan gambar kucing astronot", "buat PPT tentang pemanasan global 8 slide", "buatkan surat lamaran dalam format Word", atau "bikin Excel daftar gaji karyawan". MyAI mendeteksi jenis permintaan dan mengarahkannya ke AI yang mampu tanpa perlu ganti mode.
 - Respons AI terstruktur `image_generation` dan mode **Gambar** untuk akun yang masuk menggunakan Gemini melalui endpoint Worker resmi yang terautentikasi. Pollinations juga dipanggil melalui endpoint Worker tervalidasi—terautentikasi untuk akun dan dibatasi per IP untuk guest—sehingga browser tidak menghubungi provider gambar secara langsung. Pemakaian server Gemini dapat mengonsumsi kuota atau biaya provider.
-- **PowerPoint / Word / Excel / PDF**: model teks aktif diberi instruksi format khusus, lalu file `.pptx`, `.docx`, `.xlsx`, atau `.pdf` dibuat dan diunduh otomatis. Kartu **Unduh** tetap ada di bawah jawaban dan di riwayat chat. PowerPoint membagi teks panjang agar tetap terbaca tanpa membuang slide berlebih; Word menjaga hierarki heading, daftar, tabel, dan metadata; Excel memisahkan tiap tabel ke lembar sendiri, mengubah angka (termasuk format `1.000.000` / `Rp`) menjadi angka asli, dan memasang filter kolom. Jika pustaka ekspor dari CDN gagal dimuat, notifikasi kini menyertakan penyebab teknis agar kegagalan mudah didiagnosis.
+- **PowerPoint / Word / Excel / PDF**: model teks aktif diberi instruksi format khusus. Ekspor Canva otomatis mengirim outline ke Worker dan memerlukan Canva OAuth; opsi PowerPoint modern-gold membuat file dua slide lokal untuk impor manual ke Canva. Word, Excel, dan PDF tetap diekspor oleh browser.
 - **Pratinjau proyek**: tombol tutup menggunakan dialog native agar tetap dapat menutup preview walaupun skrip proyek di dalam iframe mengalami error; Escape dan klik backdrop juga menutup dialog.
 - Jika katalog AI guest sedang gagal dimuat, MyAI tetap menampilkan pilihan AI guest agar pengguna bisa mencoba layanan server dan menerima pesan error yang jelas jika Worker belum dikonfigurasi.
 - Deteksi tidak aktif di mode Coding, dan tidak terpicu untuk pertanyaan seperti "cara membuat PPT", "kode Python untuk membaca Excel", atau "ringkas PDF ini".
@@ -250,9 +255,9 @@ Browser tidak dapat membaca LocalStorage dari port atau origin lain. Karena itu 
 
 ## Ekspor dokumen di v4.2
 
-- Setelah AI menjawab, tekan **Ekspor** di bawah balasan untuk mengunduh Word (`.docx`), PowerPoint (`.pptx`), Excel (`.xlsx`), atau PDF.
+- Setelah AI menjawab, tekan **Ekspor** di bawah balasan. Pilih PowerPoint melalui Canva Connect untuk tautan edit/unduhan, atau PowerPoint modern-gold untuk mengunduh PPTX dua slide dan mengimpornya manual ke Canva. Word (`.docx`), Excel (`.xlsx`), dan PDF juga tersedia.
 - Untuk PowerPoint yang rapi, minta AI membuat judul dan isi per slide. Untuk Excel, minta tabel dengan nama kolom dan nilai yang jelas. Ekspor menyertakan judul, daftar, tabel, dan sumber yang tersedia.
-- File dibuat di browser. Koneksi internet diperlukan saat format pertama kali dipakai untuk memuat pustaka ekspor dari CDN.
+- DOCX/XLSX/PDF serta PPTX modern-gold dua slide dibuat di browser. Ekspor Canva Connect di Worker tetap tersedia untuk desain otomatis dan tautan edit.
 - Ekspor mengubah jawaban yang ada; ia tidak membuat konten baru dan tidak menambahkan gambar AI ke slide.
 
 Percakapan bisa dikelompokkan ke folder kerja di menu kiri. Tekan tombol **＋** di samping Folder kerja untuk membuat folder, lalu tekan ikon folder di baris chat untuk memindahkannya atau mengembalikannya ke **Obrolan biasa**. Folder tersimpan di browser; penempatan chat juga ikut tersimpan bersama chat dan dapat tersinkronkan jika Firebase aktif.
@@ -307,23 +312,23 @@ Percakapan dapat dikelompokkan ke folder kerja dari menu kiri. Buat folder melal
 ## Menggunakan AI
 
 1. Masuk menggunakan Google.
-2. Untuk API gratis yang dikelola Worker, akun harus terdaftar dalam secret `AUTHORIZED_EMAILS`.
-3. Model yang tersedia muncul dari katalog Worker setelah login.
+2. Akun Google atau GitHub terverifikasi dapat memakai API Worker; tidak diperlukan pendaftaran email satu per satu.
+3. Model yang tersedia muncul dari katalog Worker setelah login Google atau GitHub.
 4. Semua jawaban memerlukan internet. Kuota/biaya provider mengikuti jenis key dan model yang dipilih.
 
 Model pada grup **Gratis** tetap menggunakan kuota provider yang disediakan server; ketersediaannya bergantung pada konfigurasi admin. Grup **Premium / cek tarif** perlu dipilih dengan sengaja dan akan meminta konfirmasi sebelum permintaan dikirim.
 
 ### API key provider server
 
-1. Simpan key sebagai Cloudflare Worker secret: `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, dan `NVIDIA_API_KEY` (atau `NVIDIA_NIM_API_KEY`). Gunakan `MONID_API_KEY` secara terpisah untuk fitur data Monid. Alternatifnya, gunakan JSON secret `AI_PROVIDER_KEYS`.
-2. Tambahkan email terverifikasi ke `AUTHORIZED_EMAILS`, lalu deploy Worker.
+1. Simpan key sebagai Cloudflare Worker secret: `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY` (atau `NVIDIA_NIM_API_KEY`), `CLAUDE_API_KEY` (atau `ANTHROPIC_API_KEY`), dan `KIMI_API_KEY` (atau `MOONSHOT_API_KEY`). Gunakan `MONID_API_KEY` secara terpisah untuk fitur data Monid. Alternatifnya, gunakan JSON secret `AI_PROVIDER_KEYS`.
+2. Pastikan login Google/GitHub aktif di Firebase, lalu deploy Worker. Jangan buat allowlist email satu akun.
 3. Browser tidak menerima nilai key; **Status AI Worker** hanya menampilkan provider yang aktif. Setelah mengganti secret dan men-deploy Worker, buka dialog tersebut lalu pilih **Muat ulang status provider** untuk mengambil katalog dan status key terbaru.
 
 Kuota dan biaya model mengikuti provider. Jangan menaruh key provider di frontend, repository, atau chat.
 
 ### Pengiriman email
 
-Pengiriman email memakai akun Resend yang dikonfigurasi admin. Verifikasi domain pengirim di Resend, lalu pasang `RESEND_API_KEY` dan `RESEND_FROM_EMAIL` pada Cloudflare Worker. Pengguna harus login ke akun yang diizinkan, meninjau email, dan menyetujui dialog konfirmasi sebelum email dikirim. Endpoint membatasi laju pengiriman per akun; isi email dikirim sebagai teks biasa.
+Pengiriman email memakai akun Resend yang dikonfigurasi admin. Verifikasi domain pengirim di Resend, lalu pasang `RESEND_API_KEY` dan `RESEND_FROM_EMAIL` pada Cloudflare Worker. Atur `EMAIL_RECIPIENT_ALLOWED_DOMAINS` sebagai daftar domain dipisahkan koma (contoh: `example.com,partner.org`); allowlist kosong menolak pengiriman. Fitur tindakan email memang mendukung penerima eksternal: UI meminta pratinjau ke backend dan konfirmasi pengguna, lalu backend mewajibkan token konfirmasi sekali pakai yang terikat pada penerima, subjek, isi, dan UID. Durable Object `EMAIL_ACTION_STORE` membatasi setiap UID hingga 20 percobaan pengiriman per hari UTC. Email dikirim sebagai teks biasa; rate limit per menit yang sudah ada juga tetap berlaku.
 
 ### Pengingat perangkat
 
@@ -355,7 +360,6 @@ npm run worker:secret -- GEMINI_API_KEY
 npm run worker:secret -- NVIDIA_API_KEY
 npm run worker:secret -- MONID_API_KEY
 npm run worker:secret -- EXPLORIUM_API_KEY
-npm run worker:secret -- AUTHORIZED_EMAILS
 ```
 
 Hanya pasang key provider yang memang tersedia/akan dipakai. Alias yang juga diterima Worker: `NVIDIA_NIM_API_KEY`. `RESEND_API_KEY` opsional untuk fitur email. Jangan memasukkan key ke `wrangler.toml`, frontend, atau Git. Untuk pengujian lokal, buat `worker/.dev.vars` (file ini diabaikan Git) dengan satu pasangan `NAMA_SECRET="nilai"` per baris; gunakan key uji dan jangan unggah file tersebut. `FIREBASE_PROJECT_ID` sudah menjadi variable non-rahasia pada konfigurasi Worker.
@@ -364,8 +368,8 @@ Secara default Worker membatasi Origin ke domain Pages, `localhost`, dan `127.0.
 
 Verifikasi setelah deploy: buka `https://myai-v3-free-api.firmansyahazharikuy6.workers.dev/api/models` atau `/models` untuk memastikan Worker menjawab (endpoint model terproteksi dapat membalas 401 tanpa sesi, yang menunjukkan Worker tercapai); jalankan chat dari website Pages setelah login; lalu periksa Cloudflare Workers → Logs untuk error. Keberhasilan `wrangler deploy` saja tidak membuktikan key provider, allowlist Firebase, kuota, atau integrasi UI produksi berfungsi. Jangan mengirim API key melalui chat.
 
-1. Pastikan Firebase Google Sign-In aktif. Setelah Pages dideploy, tambahkan hostname `myai-v3-firmansyah.pages.dev` ke **Firebase Console → Authentication → Settings → Authorized domains**. Untuk tes lokal gunakan `localhost`, bukan `127.0.0.1`. Firebase project saat ini `my-ai-69027`.
-2. Secret `AI_PROVIDER_KEYS` dan `AUTHORIZED_EMAILS` tetap berada di Worker lama. Nilai secret tidak bisa dibaca atau dipindahkan otomatis, tetapi gateway Pages tidak memerlukan salinan secret.
+1. Pastikan Firebase Google Sign-In/GitHub aktif. Setelah Pages dideploy, tambahkan hostname `myai-v3-firmansyah.pages.dev` ke **Firebase Console → Authentication → Settings → Authorized domains**. Untuk tes lokal gunakan `localhost`, bukan `127.0.0.1`. Firebase project saat ini `my-ai-69027`.
+2. Secret provider `AI_PROVIDER_KEYS` tetap berada di Worker. Nilai secret tidak bisa dibaca atau dipindahkan otomatis, tetapi gateway Pages tidak memerlukan salinan secret. Akses semua akun Google/GitHub terverifikasi dibatasi rate limit per UID, bukan allowlist alamat email.
 3. Untuk membangun dan mengunggah website ke Pages, dari folder proyek jalankan:
 
    Di macOS/Linux cukup jalankan `bash pages/build.sh`, lalu `cd pages` dan perintah `npx wrangler` yang sama.
@@ -379,13 +383,12 @@ Verifikasi setelah deploy: buka `https://myai-v3-free-api.firmansyahazharikuy6.w
 
    Perintah `pages project create` hanya diperlukan sekali. Jika Wrangler menyatakan project sudah ada, lanjutkan ke deploy.    `pages\_worker.js` meneruskan endpoint AI `/api/...` ke Worker yang sudah ada; file build tidak memuat folder `functions/` atau file `.env`.
 4. Setelah deploy, gunakan URL `https://myai-v3-firmansyah.pages.dev`. Frontend sudah memakai URL API relatif `/api`. Situs GitHub Pages lama tidak berubah; gunakan URL Pages yang baru untuk login dan chat.
-5. Jika menyiapkan Worker dari awal, tambahkan email Google yang boleh memakai API. Saat CLI meminta nilai secret, masukkan alamat email yang diizinkan; untuk beberapa alamat pisahkan dengan koma:
+5. Jika menyiapkan Worker dari awal, pastikan Firebase project ID dan rate limiter dikonfigurasi:
 
    ```powershell
    cd ..\worker
    npx wrangler@latest login
    npx wrangler@latest deploy
-   npx wrangler@latest secret put AUTHORIZED_EMAILS
    ```
 
 6. Simpan key provider yang punya paket gratis sebagai JSON secret Worker:
@@ -394,13 +397,15 @@ Verifikasi setelah deploy: buka `https://myai-v3-free-api.firmansyahazharikuy6.w
    npx wrangler@latest secret put AI_PROVIDER_KEYS
    ```
 
-   Contoh format: `{"openrouter":"KEY_OPENROUTER","gemini":"KEY_GEMINI","groq":"KEY_GROQ","nvidia":"KEY_NVIDIA"}`. Ganti nilai contoh dengan key milikmu. Nama provider JSON yang diterima adalah `openrouter`, `gemini`, `groq`, dan `nvidia`. Secret terpisah akan diprioritaskan untuk provider yang sama. Jangan kirim key melalui chat, jangan taruh di file frontend, dan jangan unggah file `.dev.vars`.
+   Contoh format: `{"openrouter":"KEY_OPENROUTER","gemini":"KEY_GEMINI","groq":"KEY_GROQ","nvidia":"KEY_NVIDIA","anthropic":"KEY_CLAUDE","moonshot":"KEY_KIMI"}`. Ganti nilai contoh dengan key milikmu. Nama provider JSON yang diterima adalah `openrouter`, `gemini`, `groq`, `nvidia`, `anthropic`/`claude`, dan `moonshot`/`kimi`. Secret terpisah akan diprioritaskan untuk provider yang sama. Jangan kirim key melalui chat, jangan taruh di file frontend, dan jangan unggah file `.dev.vars`.
 
-   Untuk menambah atau mengganti satu key tanpa menimpa JSON tersebut, simpan sebagai secret terpisah dari folder `worker`. Secret terpisah yang dikenali: `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY`/`NVIDIA_NIM_API_KEY`, `MONID_API_KEY`, dan `EXPLORIUM_API_KEY`. Provider harus mengaktifkan akses API untuk key tersebut; konfigurasi hanya dibaca Worker dan nilainya tidak dikirim ke browser.
+   Untuk menambah atau mengganti satu key tanpa menimpa JSON tersebut, simpan sebagai secret terpisah dari folder `worker`. Secret terpisah yang dikenali: `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY`/`NVIDIA_NIM_API_KEY`, `CLAUDE_API_KEY`/`ANTHROPIC_API_KEY`, `KIMI_API_KEY`/`MOONSHOT_API_KEY`, `MONID_API_KEY`, dan `EXPLORIUM_API_KEY`. Provider harus mengaktifkan akses API untuk key tersebut; konfigurasi hanya dibaca Worker dan nilainya tidak dikirim ke browser.
 
-   Katalog chat mencakup semua model teks yang dikembalikan katalog Gemini, Groq, OpenRouter, dan NVIDIA NIM; hasil OpenRouter tidak dipotong ke batas jumlah model. Integrasi langsung Kimi/Moonshot dan Anthropic telah dihapus; model Claude atau Kimi yang tersedia melalui OpenRouter tetap memakai key OpenRouter. Model khusus gambar, audio, transkripsi, serta tugas non-chat lain dikeluarkan dari daftar chat. Pages meneruskan `/api/models` dan `/api/chat` ke Worker; endpoint chat juga mempertahankan route `/gateway` lama. Katalog mengelompokkan model berdasarkan kemampuan: akses dasar/ringkas di **FREE**, model umum di **BASIC**, model besar atau reasoning di **PRO**, dan model flagship (mis. Gemini Pro, Claude Sonnet/Opus, serta model sangat besar) di **MAX**. Pemilihan tier mencakup seluruh tier yang lebih rendah. Tier aplikasi berbeda dari billing provider; biaya tetap mengikuti ketentuan provider. Pilihan paket disimpan di browser dan bukan sistem pembayaran atau otorisasi langganan server-side. Dialog paket menampilkan provider dan jumlah model yang benar-benar dimuat untuk setiap tier. Monid memakai `MONID_API_KEY` untuk menemukan dan mengeksekusi endpoint data **BASIC**, bukan sebagai model chat. Explorium memakai `EXPLORIUM_API_KEY` server-side untuk mencari maksimal satu hasil preview perusahaan; panggilan ini dapat memakai kredit provider. Hasil Explorium dapat digabungkan dengan hasil run Monid yang sudah dijalankan, lalu diekspor langsung di browser sebagai DOCX, PPTX, atau XLSX tanpa panggilan AI tambahan. Periksa harga dan saldo provider sebelum menjalankan pencarian atau endpoint. Mode **Cari di web** dan **Riset mendalam** memakai Google Search grounding melalui Gemini atau plugin web OpenRouter; jika model terpilih tidak mendukung pencarian, UI berpindah ke model Gemini/OpenRouter yang tersedia pada tier aktif atau menampilkan alasan. Sumber yang dikembalikan provider ditampilkan dan ikut ekspor dokumen. Biaya provider/model dapat berlaku. Ini bukan koneksi ke setiap situs internet atau Bing, dan cakupan hasil mengikuti provider. Jika katalog gagal dimuat, dropdown menyediakan katalog model lokal cadangan yang ditandai belum diverifikasi; ID model cadangan dapat berubah atau tidak tersedia di provider. Tombol **Rapikan** dan **Saran** memakai template lokal saat AI tidak tersedia. Saat koneksi tersedia, **Rapikan** memprioritaskan Groq, lalu Gemini, kemudian model cepat cadangan yang diizinkan tier aktif. Fallback gateway tidak berpindah provider secara diam-diam; alternatif lain hanya dipakai setelah persetujuan pengguna.
+   Katalog chat memuat semua model teks yang dikembalikan katalog Gemini, Groq, OpenRouter, NVIDIA NIM, Anthropic, dan Moonshot; hasil OpenRouter tidak dipotong ke batas jumlah model. Model Claude/Kimi juga dapat dipilih langsung melalui adapter Anthropic dan Moonshot, dengan key provider masing-masing. Model khusus gambar, audio, transkripsi, serta tugas non-chat lain dikeluarkan dari daftar chat. Pages meneruskan `/api/models` dan `/api/chat` ke Worker; endpoint chat juga mempertahankan route `/gateway` lama. Katalog mengelompokkan model berdasarkan kemampuan: akses dasar/ringkas di **FREE**, model umum di **BASIC**, Claude Haiku dan model menengah di **PRO**, dan model flagship (mis. Gemini Pro, Claude Sonnet/Opus, serta Kimi K2) di **MAX**. Satu model baseline NVIDIA NIM (`nvidia/cosmos-reason2-8b`, jika tersedia di katalog provider) dimasukkan ke akses **FREE** agar NVIDIA menjadi pilihan awal akun FREE; NIM lainnya tetap mengikuti tier modelnya. Pemilihan tier mencakup seluruh tier yang lebih rendah. Tier aplikasi berbeda dari billing provider; akses FREE tidak menjamin inferensi tanpa biaya, dan biaya/kuota NIM tetap mengikuti ketentuan NVIDIA. Tier yang tersimpan di browser hanya mengatur tampilan pilihan; otorisasi model premium ditegakkan backend berdasarkan katalog dan UID dalam `PREMIUM_ALLOWED_UIDS`, bukan berdasarkan tier LocalStorage. Dialog paket menampilkan provider dan jumlah model yang benar-benar dimuat untuk setiap tier. Monid memakai `MONID_API_KEY` untuk menemukan dan mengeksekusi endpoint data **BASIC**, bukan sebagai model chat. Ollama belum didaftarkan sebagai provider chat; akses serverless Worker tidak dapat mencapai Ollama yang hanya berjalan di perangkat pengguna. Explorium memakai `EXPLORIUM_API_KEY` server-side untuk mencari maksimal satu hasil preview perusahaan; panggilan ini dapat memakai kredit provider. Hasil Explorium dapat digabungkan dengan hasil run Monid yang sudah dijalankan, lalu diekspor sebagai DOCX atau XLSX di browser; jika memilih PPTX, outline diekspor melalui Canva Connect. Periksa harga dan saldo provider sebelum menjalankan pencarian atau endpoint. Mode **Cari di web** dan **Riset mendalam** memakai Google Search grounding melalui Gemini atau plugin web OpenRouter; jika model terpilih tidak mendukung pencarian, UI berpindah ke model Gemini/OpenRouter yang tersedia pada tier aktif atau menampilkan alasan. Sumber yang dikembalikan provider ditampilkan dan ikut ekspor dokumen. Biaya provider/model dapat berlaku. Ini bukan koneksi ke setiap situs internet atau Bing, dan cakupan hasil mengikuti provider. Dropdown memakai katalog online/cached dari provider, bukan daftar model rekaan; bila layanan Worker tidak tersedia, aplikasi menampilkan gangguan dan tidak membuat jawaban chat lokal berlabel AI. Tombol **Rapikan** dan **Saran** tetap dapat memakai template prompt lokal bila provider tidak tersedia. Jika terjadi kegagalan provider dan fallback diizinkan, Worker hanya memakai model FREE terverifikasi dari katalog; UI mengumumkan provider serta model pengganti.
 
-   Endpoint pembuatan gambar memakai `GEMINI_API_KEY` sebagai secret server-side. Pasang atau perbarui key dari folder `worker` dengan `npx wrangler@latest secret put GEMINI_API_KEY`, lalu deploy ulang Worker dan Pages agar keduanya memakai route terbaru. Route `/images/generate` hanya menerima akun terverifikasi yang ada di `AUTHORIZED_EMAILS`, membatasi prompt dan rasio gambar, serta memakai rate limit Worker yang sudah dikonfigurasi. Pemakaian Gemini dapat mengonsumsi kuota atau biaya provider; periksa paket dan batas billing Gemini sebelum mengaktifkan endpoint.
+   Endpoint pembuatan gambar memakai `GEMINI_API_KEY` sebagai secret server-side. Pasang atau perbarui key dari folder `worker` dengan `npx wrangler@latest secret put GEMINI_API_KEY`, lalu deploy ulang Worker dan Pages agar keduanya memakai route terbaru. Route `/images/generate` hanya menerima akun Firebase Google/GitHub terverifikasi, membatasi prompt dan rasio gambar, serta memakai rate limit Worker yang sudah dikonfigurasi. Pemakaian Gemini dapat mengonsumsi kuota atau biaya provider; periksa paket dan batas billing Gemini sebelum mengaktifkan endpoint.
+
+   Adapter Anthropic Claude dan Moonshot Kimi tersedia, tetapi pada deployment yang diperiksa secret `CLAUDE_API_KEY`/`ANTHROPIC_API_KEY` dan `KIMI_API_KEY`/`MOONSHOT_API_KEY` belum terpasang. Keduanya akan tampil sebagai belum dikonfigurasi sampai admin memasang key API yang sah; API key tidak boleh dikirim melalui chat.
 
 Jika memakai sinkronisasi chat, aktifkan **Firestore Database** dan publikasikan aturan dari `firestore.rules`. Firebase Functions tidak diperlukan untuk API AI; `firebase.json` hanya menargetkan aturan Firestore agar Functions lama tidak ikut ter-deploy.
 
@@ -448,3 +453,38 @@ firebase.json     Konfigurasi aturan Firestore; tidak men-deploy Functions
 ## Rotasi API key
 
 Jika API key provider terekspos, cabut key lama di dashboard provider, lalu simpan key pengganti sebagai secret individual (misalnya `npx wrangler@latest secret put OPENROUTER_API_KEY`) dari folder `worker`. Jangan pernah mengirim key ke chat atau menyimpannya di frontend.
+
+## Ekspor PowerPoint Canva Connect dan manual
+
+Ekspor otomatis PowerPoint dan konversi Excel-ke-PowerPoint menggunakan Canva Connect API dari Cloudflare Worker. Browser hanya mengirim outline; API key/secret Canva tidak pernah dikirim ke browser. Dari menu ekspor jawaban, pengguna juga dapat memilih **PowerPoint modern-gold untuk Canva** untuk mengunduh PPTX dua slide yang dibuat lokal dan mengimpornya sendiri ke Canva; jalur manual ini tidak memerlukan Canva OAuth.
+
+Konfigurasi yang sudah disiapkan di `worker/wrangler.toml`:
+
+- KV binding `CANVA_TOKEN_STORE` menyimpan OAuth state sementara dan token per UID Firebase.
+- `CANVA_BRAND_TEMPLATE_ID` memakai template ID yang diberikan; pastikan ID tersebut adalah Brand Template yang dapat diakses akun Canva.
+- `CANVA_REDIRECT_URI` bernilai `https://myai-v3-free-api.firmansyahazharikuy6.workers.dev/canva/oauth/callback`. Daftarkan URL ini persis di Canva Developer Portal.
+- Cloudflare secrets yang harus tersedia: `CANVA_CLIENT_ID` dan `CANVA_CLIENT_SECRET`. Nilainya hanya dibaca lewat `env` Worker.
+- Aktifkan OAuth scopes `brandtemplate:content:read`, `design:content:read`, dan `design:content:write`. Autofill Brand Template memerlukan paket Canva yang mendukung fitur tersebut.
+
+Endpoints:
+
+- `GET /api/canva/oauth/start` — memerlukan `Authorization: Bearer <Firebase ID token>`, mengembalikan URL otorisasi Canva. Pengguna menyetujui akses lalu Canva memanggil callback Worker.
+- `POST /api/presentation` — memerlukan login Google/GitHub Firebase dan outline valid. Request:
+
+  ```json
+  {
+    "title": "Rencana Pemasaran",
+    "slides": [
+      {
+        "title": "Tujuan",
+        "content": ["Meningkatkan awareness", "Mengukur konversi"],
+        "notes": "Jelaskan metrik utama."
+      }
+    ],
+    "exportFormat": "pptx"
+  }
+  ```
+
+  Respons sukses berisi `designId`, `editUrl`, `viewUrl`, `downloadUrl`, `templateUsed`, dan outline. Tautan ekspor Canva berlaku terbatas (umumnya 24 jam); buat ulang ekspor jika tautan kedaluwarsa.
+
+Worker menangani refresh token setelah kedaluwarsa/401, retry 429 dengan jeda bertahap, serta melaporkan kegagalan 403/5xx secara eksplisit. Jika Brand Template tidak dikonfigurasi, Canva membuat desain presentasi kosong dan Worker mengembalikan tautan edit/view serta outline; endpoint Canva tidak beralih diam-diam ke ekspor lokal.

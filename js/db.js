@@ -2,6 +2,7 @@ import { firebaseConfig } from "./config.js?v=20261020-v5.29";
 
 const FB_BASE = "https://www.gstatic.com/firebasejs/11.2.0";
 const LS_KEY = "myai_chats";
+const PENDING_AUTH_PROVIDER_KEY = "myai_pending_auth_provider";
 
 export const firebaseEnabled = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId);
 
@@ -13,9 +14,9 @@ let firebaseInitPromise = null;
 let firebaseInitError = null;
 let lastSyncError = null;
 let lastAuthError = null;
+let lastAuthProvider = null;
 let nativeFirebaseAuth = null;
-let phoneConfirmation = null;
-let phoneRecaptchaVerifier = null;
+let pendingGithubLink = null;
 
 function isNativeApp() {
   return window.Capacitor?.isNativePlatform?.() === true;
@@ -25,6 +26,12 @@ export function consumeAuthError() {
   const error = lastAuthError;
   lastAuthError = null;
   return error;
+}
+
+export function consumeAuthProvider() {
+  const provider = lastAuthProvider;
+  lastAuthProvider = null;
+  return provider;
 }
 
 export function consumeSyncError() {
@@ -66,10 +73,20 @@ export async function initFirebase(onUserChange) {
       lastAuthError = error;
     });
     if (!native) {
+      const pendingProvider = sessionStorage.getItem(PENDING_AUTH_PROVIDER_KEY);
       try {
-        await fb.getRedirectResult(auth);
+        const result = await fb.getRedirectResult(auth);
+        if (!result && pendingProvider) {
+          const error = new Error("Autentikasi kembali tanpa menyelesaikan login.");
+          error.code = "auth/redirect-no-result";
+          lastAuthError = error;
+          lastAuthProvider = pendingProvider;
+        }
       } catch (error) {
         lastAuthError = error;
+        lastAuthProvider = pendingProvider;
+      } finally {
+        sessionStorage.removeItem(PENDING_AUTH_PROVIDER_KEY);
       }
     }
   })();
@@ -81,7 +98,32 @@ export async function initFirebase(onUserChange) {
   }
 }
 
-export async function signIn() {
+export function hasPendingGithubLink() {
+  return Boolean(pendingGithubLink);
+}
+
+export async function linkPendingGithubCredential(targetUser) {
+  if (!pendingGithubLink) return null;
+  const expectedEmail = pendingGithubLink.email?.trim().toLowerCase();
+  const actualEmail = targetUser?.email?.trim().toLowerCase();
+  if (!expectedEmail || !actualEmail || expectedEmail !== actualEmail) {
+    const error = new Error("Masuk dengan akun Google yang menggunakan alamat email yang sama dengan akun GitHub.");
+    error.code = "auth/github-link-email-mismatch";
+    throw error;
+  }
+  try {
+    const result = await fb.linkWithCredential(targetUser, pendingGithubLink.credential);
+    pendingGithubLink = null;
+    return result;
+  } catch (error) {
+    if (["auth/credential-already-in-use", "auth/provider-already-linked"].includes(error?.code)) {
+      pendingGithubLink = null;
+    }
+    throw error;
+  }
+}
+
+export async function signIn({ allowRedirectFallback = true } = {}) {
   if ((!fb || !auth) && firebaseInitPromise) {
     try {
       await firebaseInitPromise;
@@ -110,9 +152,15 @@ export async function signIn() {
   try {
     return await fb.signInWithPopup(auth, provider);
   } catch (error) {
-    if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(error?.code)) {
-      await fb.signInWithRedirect(auth, provider);
-      return null;
+    if (allowRedirectFallback && ["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(error?.code)) {
+      sessionStorage.setItem(PENDING_AUTH_PROVIDER_KEY, "google");
+      try {
+        await fb.signInWithRedirect(auth, provider);
+        return null;
+      } catch (redirectError) {
+        sessionStorage.removeItem(PENDING_AUTH_PROVIDER_KEY);
+        throw redirectError;
+      }
     }
     throw error;
   }
@@ -123,112 +171,36 @@ async function ensureAuthReady() {
   if (!fb || !auth) throw new Error("Firebase Auth belum siap. Muat ulang aplikasi lalu coba lagi.");
 }
 
-export async function signInWithEmail(email, password) {
-  await ensureAuthReady();
-  return fb.signInWithEmailAndPassword(auth, email.trim(), password);
-}
-
-export async function createEmailAccount(email, password) {
-  await ensureAuthReady();
-  const credential = await fb.createUserWithEmailAndPassword(auth, email.trim(), password);
-  await fb.sendEmailVerification(credential.user);
-  return credential;
-}
-
-export async function sendPasswordReset(email) {
-  await ensureAuthReady();
-  return fb.sendPasswordResetEmail(auth, email.trim());
-}
-
-export async function resendEmailVerification() {
-  await ensureAuthReady();
-  if (!auth.currentUser) throw new Error("Masuk terlebih dahulu untuk mengirim ulang verifikasi.");
-  return fb.sendEmailVerification(auth.currentUser);
-}
-
-export async function refreshCurrentUser() {
-  await ensureAuthReady();
-  if (!auth.currentUser) throw new Error("Tidak ada akun yang sedang masuk.");
-  await auth.currentUser.reload();
-  await auth.currentUser.getIdToken(true);
-  return auth.currentUser;
-}
-
 export async function signInWithGithub() {
   await ensureAuthReady();
-  if (isNativeApp()) {
-    if (!nativeFirebaseAuth) throw new Error("Login GitHub native belum siap. Tutup dan buka kembali aplikasi.");
-    const result = await nativeFirebaseAuth.signInWithGithub({ skipNativeAuth: true });
-    const accessToken = result.credential?.accessToken;
-    if (!accessToken) throw new Error("Login GitHub tidak mengembalikan token. Periksa konfigurasi Firebase native.");
-    return fb.signInWithCredential(auth, fb.GithubAuthProvider.credential(accessToken));
-  }
-  const provider = new fb.GithubAuthProvider();
-  return fb.signInWithRedirect(auth, provider);
-}
-
-export async function sendPhoneVerification(phoneNumber, recaptchaContainer) {
-  await ensureAuthReady();
-  if (isNativeApp()) {
-    if (!nativeFirebaseAuth) throw new Error("Verifikasi nomor telepon belum siap di aplikasi ini.");
-    return new Promise(async (resolve, reject) => {
-      let listener;
-      const timer = window.setTimeout(() => {
-        listener?.remove();
-        reject(new Error("Waktu verifikasi habis. Minta kode baru."));
-      }, 120000);
-      try {
-        listener = await nativeFirebaseAuth.addListener("phoneCodeSent", (event) => {
-          window.clearTimeout(timer);
-          listener?.remove();
-          if (!event.verificationId) {
-            reject(new Error("Firebase tidak mengembalikan ID verifikasi."));
-            return;
-          }
-          resolve({ verificationId: event.verificationId, native: true });
-        });
-        await nativeFirebaseAuth.signInWithPhoneNumber({ phoneNumber });
-      } catch (error) {
-        window.clearTimeout(timer);
-        listener?.remove();
-        reject(error);
-      }
-    });
-  }
-  phoneRecaptchaVerifier?.clear();
-  phoneRecaptchaVerifier = null;
-  phoneConfirmation = null;
-  const verifier = new fb.RecaptchaVerifier(auth, recaptchaContainer, { size: "normal" });
-  phoneRecaptchaVerifier = verifier;
   try {
-    phoneConfirmation = await fb.signInWithPhoneNumber(auth, phoneNumber, verifier);
-    return { native: false };
+    if (isNativeApp()) {
+      if (!nativeFirebaseAuth) throw new Error("Login GitHub native belum siap. Tutup dan buka kembali aplikasi.");
+      const result = await nativeFirebaseAuth.signInWithGithub({ skipNativeAuth: true });
+      const accessToken = result.credential?.accessToken;
+      if (!accessToken) throw new Error("Login GitHub tidak mengembalikan token. Periksa konfigurasi Firebase native.");
+      return await fb.signInWithCredential(auth, fb.GithubAuthProvider.credential(accessToken));
+    }
+    const provider = new fb.GithubAuthProvider();
+    return await fb.signInWithPopup(auth, provider);
   } catch (error) {
-    verifier.clear();
-    phoneRecaptchaVerifier = null;
+    if (error?.code === "auth/account-exists-with-different-credential") {
+      const credential = fb.GithubAuthProvider.credentialFromError(error);
+      const email = error.customData?.email || error.email || "";
+      if (credential && email) pendingGithubLink = { credential, email };
+    }
+    if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(error?.code)) {
+      sessionStorage.setItem(PENDING_AUTH_PROVIDER_KEY, "github");
+      try {
+        await fb.signInWithRedirect(auth, provider);
+        return null;
+      } catch (redirectError) {
+        sessionStorage.removeItem(PENDING_AUTH_PROVIDER_KEY);
+        throw redirectError;
+      }
+    }
     throw error;
   }
-}
-
-export async function confirmPhoneVerification(code, verification) {
-  await ensureAuthReady();
-  if (verification?.native) {
-    await nativeFirebaseAuth.confirmVerificationCode({
-      verificationId: verification.verificationId,
-      verificationCode: code.trim(),
-    });
-    return fb.signInWithCredential(
-      auth,
-      fb.PhoneAuthProvider.credential(verification.verificationId, code.trim()),
-    );
-  }
-  if (!phoneConfirmation) throw new Error("Minta kode verifikasi terlebih dahulu.");
-  const confirmation = phoneConfirmation;
-  const result = await confirmation.confirm(code.trim());
-  phoneConfirmation = null;
-  phoneRecaptchaVerifier?.clear();
-  phoneRecaptchaVerifier = null;
-  return result;
 }
 
 export async function signInWithApple() {
