@@ -5332,6 +5332,8 @@ dialog:not(.voice-chat-dialog):not(.html-preview-dialog):not(.file-preview-dialo
 }
 
 @media (max-width: 600px) {
+  .composer { width: calc(100% - 28px); }
+
   .chat-wrap.empty .messages {
     justify-content: center;
     padding: 12px;
@@ -5356,5 +5358,5 @@ dialog:not(.voice-chat-dialog):not(.html-preview-dialog):not(.file-preview-dialo
     padding: 7px 14px;
     font-size: 13px;
   }
-  .composer { margin-bottom: max(28px, env(safe-area-inset-bottom)); }
+  .composer { margin-bottom: max(16px, env(safe-area-inset-bottom)); }
 }
