@@ -4008,6 +4008,7 @@ function setTaskMode(mode, notify = true) {
     return;
   }
   taskMode = mode;
+  $("composer").classList.toggle("image-mode", mode === "image");
   localStorage.setItem("myai_task_mode", mode);
   const modeLabels = {
     auto: translateText("modeGeneral"),
