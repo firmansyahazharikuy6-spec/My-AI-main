@@ -1,5 +1,6 @@
 const WORKER_ORIGIN = "https://myai-v3-free-api.firmansyahazharikuy6.workers.dev";
 const API_ROUTES = new Map([
+  ["/api/guest/config", "/guest/config"],
   ["/api/guest/models", "/guest/models"],
   ["/api/guest/chat", "/guest/chat"],
   ["/api/guest/transcribe", "/guest/transcribe"],

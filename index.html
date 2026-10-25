@@ -227,7 +227,7 @@
                     <span class="chev" aria-hidden="true"></span>
                   </button>
                   <div id="modelMenu" class="model-menu hidden" role="listbox">
-                    <input id="modelSearch" type="search" data-i18n-placeholder="modelSearchPlaceholder" placeholder="Search models… (Qwen, Claude, Gemini, DeepSeek)" autocomplete="off" />
+                    <input id="modelSearch" type="search" data-i18n-placeholder="modelSearchPlaceholder" placeholder="Search models… (Qwen, Gemini, DeepSeek)" autocomplete="off" />
                     <div id="modelList" class="model-list"></div>
                   </div>
                 </div>
@@ -495,17 +495,12 @@
   </dialog>
   <dialog id="apiDialog" class="api-dialog" aria-labelledby="apiDialogTitle">
     <button id="closeApiDialog" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
-    <h2 id="apiDialogTitle">Status AI Worker</h2>
-    <p class="muted">Permintaan chat diproses oleh Cloudflare Worker. API key provider tetap di server dan browser tidak mengunduh bobot model.</p>
-    <p id="apiKeyStatus" class="api-key-status" role="status" aria-live="polite"></p>
+    <h2 id="apiDialogTitle">Tes provider AI</h2>
     <div class="dialog-actions provider-health-actions">
       <button id="testAllProviders" class="btn primary" type="button">Tes semua provider</button>
     </div>
     <p id="providerHealthSummary" class="api-key-status" role="status" aria-live="polite"></p>
-    <p class="muted">Chat teks non-pencarian, termasuk Rapikan/Saran, diprioritaskan ke NVIDIA NIM jika secret dan model yang sesuai tersedia. Pencarian web dan pembuatan gambar memakai provider khusus bila NIM tidak mendukung kapabilitasnya. Pemakaian NIM mengikuti kuota dan billing akun NVIDIA. Saat kuota NIM habis, gateway hanya mencoba kandidat fallback berakses FREE yang tersedia.</p>
-    <p class="muted">Tes chat mengirim prompt pendek, mencatat token yang dilaporkan, dan dapat memakai kuota atau biaya provider. Gemini diuji sebagai satu provider; fitur gambar memakai secret Gemini yang sama. Tes Pollinations membuat gambar uji dan dapat memakai kuota. Monid diuji dengan pencarian discover; tidak menjalankan endpoint berbayar.</p>
     <div id="apiProviderList" class="api-provider-list" aria-label="Status provider AI"></div>
-    <p class="muted">Key hanya dapat diatur oleh admin di Cloudflare Worker; browser tidak menyimpan atau mengirim nilai key. Monid adalah layanan data tools dan diperiksa saat digunakan.</p>
   </dialog>
   <dialog id="usageDashboardDialog" class="api-dialog usage-dashboard-dialog" aria-labelledby="usageDashboardTitle">
     <button id="closeUsageDashboard" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>

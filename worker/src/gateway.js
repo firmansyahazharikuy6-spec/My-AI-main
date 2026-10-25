@@ -11,18 +11,14 @@ const GATEWAY_PROVIDERS = {
   groq: { label: "Groq · Gateway", keyName: "GROQ_API_KEY" },
   openrouter: { label: "OpenRouter · Gateway", keyName: "OPENROUTER_API_KEY" },
   nvidia: { label: "NVIDIA NIM", keyName: "NVIDIA_API_KEY or NVIDIA_NIM_API_KEY" },
-  anthropic: { label: "Anthropic Claude", keyName: "CLAUDE_API_KEY or ANTHROPIC_API_KEY" },
-  moonshot: { label: "Moonshot Kimi", keyName: "KIMI_API_KEY or MOONSHOT_API_KEY" },
 };
 const GATEWAY_LABELS = {
   gemini: "Gemini",
   groq: "Groq",
   openrouter: "OpenRouter",
   nvidia: "NVIDIA",
-  anthropic: "Anthropic Claude",
-  moonshot: "Moonshot Kimi",
 };
-const GATEWAY_FALLBACK_PRIORITY = ["nvidia", "groq", "gemini", "openrouter", "moonshot", "anthropic"];
+const GATEWAY_FALLBACK_PRIORITY = ["nvidia", "groq", "gemini", "openrouter"];
 const MAX_AUTOMATIC_FALLBACK_MODELS = 5;
 const GATEWAY_CATALOG_TTL_MS = 5 * 60 * 1000;
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
@@ -58,45 +54,14 @@ class GatewayError extends Error {
   }
 }
 
-function buildAnthropicBody(input) {
-  const system = input.messages
-    .filter((message) => message.role === "system")
-    .map((message) => message.content)
-    .join("\n\n");
-  const messages = input.messages
-    .filter((message) => message.role !== "system")
-    .map((message) => ({
-      role: message.role,
-      content: [
-        ...(message.content ? [{ type: "text", text: message.content }] : []),
-        ...imageParts(message.images || []).map((image) => ({
-          type: "image",
-          source: { type: "base64", media_type: image.mimeType, data: image.data },
-        })),
-      ],
-    }));
-  return {
-    model: input.model,
-    max_tokens: 4096,
-    messages,
-    stream: true,
-    temperature: Math.min(1, input.temperature),
-    ...(system ? { system } : {}),
-  };
-}
-
 const OPENAI_COMPATIBLE_PROVIDER_URLS = {
   groq: "https://api.groq.com/openai/v1",
   openrouter: "https://openrouter.ai/api/v1",
   nvidia: "https://integrate.api.nvidia.com/v1",
-  moonshot: "https://api.moonshot.ai/v1",
 };
 
 function providerCatalogHeaders(provider, key) {
   if (provider === "gemini") return { "x-goog-api-key": key };
-  if (provider === "anthropic") {
-    return { "anthropic-version": "2023-06-01", "x-api-key": key };
-  }
   const headers = { Authorization: `Bearer ${key}` };
   if (provider === "openrouter") {
     headers["HTTP-Referer"] = "https://myai-v3-firmansyah.pages.dev";
@@ -111,17 +76,6 @@ function providerChatConfig(input) {
       url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`,
       headers: { "Content-Type": "application/json", "x-goog-api-key": input.key },
       body: buildGeminiBody(input),
-    };
-  }
-  if (input.provider === "anthropic") {
-    return {
-      url: "https://api.anthropic.com/v1/messages",
-      headers: {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "x-api-key": input.key,
-      },
-      body: buildAnthropicBody(input),
     };
   }
   const baseUrl = OPENAI_COMPATIBLE_PROVIDER_URLS[input.provider];
@@ -147,9 +101,7 @@ export const PROVIDER_ADAPTERS = Object.freeze(Object.fromEntries(
     async listModels(key, signal) {
       const endpoint = id === "gemini"
         ? "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
-        : id === "anthropic"
-          ? "https://api.anthropic.com/v1/models?limit=1000"
-          : `${OPENAI_COMPATIBLE_PROVIDER_URLS[id]}/models`;
+        : `${OPENAI_COMPATIBLE_PROVIDER_URLS[id]}/models`;
       return fetch(endpoint, { headers: providerCatalogHeaders(id, key), signal });
     },
     chat(input) {
@@ -212,8 +164,6 @@ export function modelAccessTier(provider, model) {
     || size >= 30;
 
   if (provider === "openrouter" && model.priceTier === "free") return "free";
-  if (provider === "moonshot" && /\bkimi[- ]?k2(?:[.-]|$)/i.test(identity)) return "max";
-  if (provider === "anthropic" && /\bhaiku\b/i.test(identity)) return "pro";
   if (provider === "nvidia" && /^nvidia\/cosmos-reason2-8b$/i.test(String(model.id || ""))) return "free";
   if (flagship) return "max";
   if (provider === "nvidia") return advanced ? "pro" : "basic";
@@ -278,14 +228,13 @@ async function fetchGatewayCatalog(provider, key, { forceRefresh = false } = {})
       ...(["openrouter", "nvidia"].includes(provider) && inputModalities.includes("image") ? { imageSupport: true } : {}),
       ...(provider === "groq" && /llama-3\.2-11b-vision|llama-4-(?:scout|maverick)/i.test(rawId) ? { imageSupport: true } : {}),
       ...(provider === "nvidia" && /(?:llama-3\.2.*vision|llama-4-(?:scout|maverick))/i.test(rawId) ? { imageSupport: true } : {}),
-      ...(provider === "anthropic" && /^claude-(?:3|4)[.-]/i.test(rawId) ? { imageSupport: true } : {}),
       ...(provider === "gemini" && !/audio|tts|transcri|embedding|image/i.test(rawId) ? { imageSupport: true } : {}),
     }];
   });
   const unique = [...new Map(models.map((model) => [model.id, model])).values()]
     .sort((left, right) => {
       if (provider !== "openrouter") return left.name.localeCompare(right.name);
-      const priority = (model) => /^(anthropic\/|openai\/)/i.test(model.id) ? 0 : 1;
+      const priority = (model) => /^openai\//i.test(model.id) ? 0 : 1;
       return priority(left) - priority(right) || left.name.localeCompare(right.name);
     });
   catalogCache.set(provider, { models: unique, expiresAt: Date.now() + GATEWAY_CATALOG_TTL_MS });
@@ -679,7 +628,7 @@ function buildOpenAIBody(input) {
     ...(input.provider === "groq" || input.provider === "openrouter"
       ? { stream_options: { include_usage: true } }
       : {}),
-    temperature: ["nvidia", "moonshot"].includes(input.provider) ? Math.min(1, input.temperature) : input.temperature,
+    temperature: input.provider === "nvidia" ? Math.min(1, input.temperature) : input.temperature,
     max_tokens: 4096,
     ...(input.webSearch && input.provider === "openrouter"
       ? { plugins: [{ id: "web", max_results: input.researchMode ? 10 : 5 }] }
@@ -776,12 +725,6 @@ function providerEventHasText(provider, eventName, data) {
   if (provider === "gemini") {
     return (data.candidates?.[0]?.content?.parts || [])
       .some((part) => typeof part.text === "string" && Boolean(part.text.trim()));
-  }
-  if (provider === "anthropic") {
-    return data.type === "content_block_delta"
-      && data.delta?.type === "text_delta"
-      && typeof data.delta.text === "string"
-      && Boolean(data.delta.text.trim());
   }
   const choices = data.choices || [];
   return choices.some((choice) => {
@@ -897,16 +840,7 @@ async function* normalizeStream(response, provider) {
   for await (const event of readProviderEvents(response)) {
     const data = parseProviderData(event);
     if (!data) continue;
-    if (provider === "anthropic" && data.type === "message_start" && data.message?.usage) {
-      usage.prompt_tokens = Number(data.message.usage.input_tokens ?? usage.prompt_tokens);
-      usage.completion_tokens = Number(data.message.usage.output_tokens ?? usage.completion_tokens);
-      usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-      hasUsage = true;
-    } else if (provider === "anthropic" && data.type === "message_delta" && data.usage) {
-      usage.completion_tokens = Number(data.usage.output_tokens ?? usage.completion_tokens);
-      usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-      hasUsage = true;
-    } else if (provider === "gemini" && data.usageMetadata) {
+    if (provider === "gemini" && data.usageMetadata) {
       usage.prompt_tokens = Number(data.usageMetadata.promptTokenCount ?? usage.prompt_tokens);
       usage.completion_tokens = Number(data.usageMetadata.candidatesTokenCount ?? usage.completion_tokens);
       usage.total_tokens = Number(data.usageMetadata.totalTokenCount ?? (usage.prompt_tokens + usage.completion_tokens));
@@ -937,11 +871,6 @@ async function* normalizeStream(response, provider) {
     if (data.type === "error" || providerError) {
       yield errorChunk(providerError || data.message || `${GATEWAY_LABELS[provider]} mengembalikan error saat streaming.`);
       break;
-    }
-    if (provider === "anthropic") {
-      if (data.type === "content_block_delta" && data.delta?.type === "text_delta"
-        && typeof data.delta.text === "string") yield chatChunk(data.delta.text);
-      continue;
     }
     const delta = data.choices?.[0]?.delta;
     const annotations = delta?.annotations || data.choices?.[0]?.message?.annotations || [];

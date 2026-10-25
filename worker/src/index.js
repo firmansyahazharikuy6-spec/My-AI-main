@@ -39,7 +39,7 @@ import { handleGuestRoute } from "./routes/guest.js";
 export { isAllowedOrigin } from "./http.js";
 export { AI_ROUTE_LIMITS, AIRateLimitStore, EmailActionStore, GuestTrialCounter } from "./rate-limit.js";
 
-const PROVIDERS = ["openrouter", "gemini", "groq", "nvidia", "anthropic", "moonshot"];
+const PROVIDERS = ["openrouter", "gemini", "groq", "nvidia"];
 const HEALTH_PROVIDER_IDS = [...PROVIDERS, "monid", "pollinations"];
 const FREE_CHAT_PROVIDERS = new Set(["openrouter", "gemini", "groq", "nvidia"]);
 const OPENAI_ENDPOINTS = {

@@ -111,8 +111,6 @@ const GATEWAY_FALLBACK_PRIORITY = [
   "gateway-groq",
   "gateway-gemini",
   "gateway-openrouter",
-  "gateway-moonshot",
-  "gateway-anthropic",
   "openrouter",
 ];
 const VOICE_PERSONAS = {
@@ -247,8 +245,6 @@ const PROVIDER_TEST_LABELS = {
   gemini: "Gemini",
   groq: "Groq",
   openrouter: "OpenRouter",
-  anthropic: "Anthropic Claude",
-  moonshot: "Moonshot Kimi",
   monid: "Monid Data Tools",
   pollinations: "Pollinations Image",
 };
@@ -364,7 +360,6 @@ function selectHomeProvider(provider) {
   const model = group?.models[0];
   if (!group || !model) {
     openApiDialog(provider);
-    $("apiKeyStatus").textContent = `${providerDisplayName(provider)} memiliki secret terpasang, tetapi katalog belum memberikan model yang dapat dipilih.`;
     return;
   }
   const modelKey = `${group.provider}::${model.id}`;
@@ -382,11 +377,10 @@ function updateUsageDashboard() {
   if (!button || !dialog) return;
   const snapshot = usageTracker.getSnapshot(chat?.id || "");
   const chatProviders = new Set(["gemini", "groq", "nvidia", "openrouter"]);
-  const removedProviders = new Set(["anthropic", "claude", "kimi", "moonshot"]);
   const healthEntries = Object.entries(snapshot.health)
     .filter(([provider]) => {
       const key = providerStatusKey(provider);
-      return chatProviders.has(key) && !removedProviders.has(key);
+      return chatProviders.has(key);
     })
     .map(([, state]) => state);
   const verifiedProviders = Object.entries(snapshot.health)
@@ -413,9 +407,9 @@ function updateUsageDashboard() {
     ...modelGroups.map((group) => group.provider),
     "pollinations",
   ].map(providerStatusKey)
-    .filter((provider) => provider && !["guest", "modelscope", ...removedProviders].includes(provider));
+    .filter((provider) => provider && !["guest", "modelscope"].includes(provider));
   const providerIds = [...new Set([...configuredProviders, ...Object.keys(snapshot.health)])]
-    .filter((provider) => !removedProviders.has(providerStatusKey(provider)));
+    .filter((provider) => !["anthropic", "claude", "kimi", "moonshot"].includes(providerStatusKey(provider)));
   const rows = providerIds.sort((left, right) => left.localeCompare(right))
     .map((provider) => [provider, snapshot.health[provider] || { status: "IDLE", used: false }]);
   const list = $("usageProviderList");
@@ -3239,9 +3233,6 @@ function modelProviderLabel(provider, groups) {
     gemini: "Google Gemini",
     groq: "Groq",
     openrouter: "OpenRouter",
-    kimi: "Kimi",
-    moonshot: "Kimi",
-    anthropic: "Anthropic Claude",
     nvidia: "NVIDIA NIM",
     monid: "Monid",
     pollinations: "Pollinations",
@@ -3551,8 +3542,6 @@ function tierModelCatalog(tierId) {
         : provider === "groq" ? "ϟ"
           : provider === "openrouter" ? "◇"
             : provider === "nvidia" ? "▣"
-              : provider === "anthropic" ? "◈"
-                : provider === "moonshot" ? "☾"
               : provider === "pollinations" ? "▧"
                 : provider === "guest" ? "⚡" : "◆",
       models: modelsForTier,
@@ -5431,13 +5420,6 @@ async function handleGoogleLogin() {
 }
 
 function updateApiDialog(providerFocus = apiDialogProviderFocus) {
-  const status = $("apiKeyStatus");
-  const activeProviders = serverProviders.map((provider) => PROVIDER_TEST_LABELS[provider] || provider);
-  status.textContent = !currentUser
-    ? "Masuk dengan akun Google atau GitHub untuk memeriksa provider AI server."
-    : activeProviders.length
-      ? `Secret terpasang di Worker: ${activeProviders.join(", ")}. Secret tidak dikirim atau disimpan di browser.`
-      : serverApiError || "Belum ada provider AI aktif di Worker.";
   const list = $("apiProviderList");
   if (!list) return;
   list.replaceChildren();
@@ -7062,8 +7044,7 @@ function bindEvents() {
           : null;
         const providerPriority = [
           "groq", "gateway-groq", "nvidia", "gateway-nvidia", "gemini", "gateway-gemini",
-          "anthropic", "gateway-anthropic", "openrouter", "gateway-openrouter",
-          "moonshot", "gateway-moonshot",
+          "openrouter", "gateway-openrouter",
         ];
         const rankCandidate = (left, right) => {
           const leftProvider = canonicalModelProvider(left.group.provider);

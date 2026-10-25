@@ -57,7 +57,7 @@ const PREMIUM_TEST_AUTH = {
   env: { PREMIUM_ALLOWED_UIDS: "premium-test-user" },
 };
 
-test("provider secrets accept Claude and Kimi keys and prefer individual Worker secrets", () => {
+test("removed Claude and Kimi secrets are ignored while supported Worker secrets remain", () => {
   const result = readProviderKeys(JSON.stringify({
     anthropic: "json-claude",
     moonshot: "json-kimi",
@@ -68,8 +68,8 @@ test("provider secrets accept Claude and Kimi keys and prefer individual Worker 
     GEMINI_API_KEY: "gemini-worker",
     GROQ_API_KEY: "groq-worker",
     OPENROUTER_API_KEY: "openrouter-worker",
-    ANTHROPIC_API_KEY: " ",
-    CLAUDE_API_KEY: " claude-worker ",
+    ANTHROPIC_API_KEY: "anthropic-worker",
+    CLAUDE_API_KEY: "claude-worker",
     KIMI_API_KEY: "kimi-worker",
     NVIDIA_API_KEY: "",
     NVIDIA_NIM_API_KEY: "nvidia-worker",
@@ -77,22 +77,22 @@ test("provider secrets accept Claude and Kimi keys and prefer individual Worker 
   });
 
   assert.deepEqual(result.keys, {
-    anthropic: "claude-worker",
     gemini: "gemini-worker",
     groq: "groq-worker",
-    moonshot: "kimi-worker",
     monid: "monid-worker",
     nvidia: "nvidia-worker",
     openrouter: "openrouter-worker",
   });
-  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.warnings, [
+    'Provider "anthropic" di AI_PROVIDER_KEYS tidak didukung Worker dan diabaikan.',
+    'Provider "moonshot" di AI_PROVIDER_KEYS tidak didukung Worker dan diabaikan.',
+  ]);
   assert.deepEqual(readProviderKeys("", {
     ANTHROPIC_API_KEY: "anthropic-alias",
     MOONSHOT_API_KEY: "moonshot-alias",
-  }).keys, {
-    anthropic: "anthropic-alias",
-    moonshot: "moonshot-alias",
-  });
+    CLAUDE_API_KEY: "claude-alias",
+    KIMI_API_KEY: "kimi-alias",
+  }).keys, {});
 });
 
 test("presentation route accepts a bounded Canva outline and rejects invalid fields", () => {
@@ -139,7 +139,7 @@ test("Pages proxy forwards Canva OAuth and presentation routes to the Worker", a
 });
 
 test("all chat providers expose the shared server-side adapter contract", () => {
-  assert.deepEqual(Object.keys(PROVIDER_ADAPTERS).sort(), ["anthropic", "gemini", "groq", "moonshot", "nvidia", "openrouter"]);
+  assert.deepEqual(Object.keys(PROVIDER_ADAPTERS).sort(), ["gemini", "groq", "nvidia", "openrouter"]);
   for (const [id, adapter] of Object.entries(PROVIDER_ADAPTERS)) {
     assert.equal(adapter.id, id);
     assert.equal(typeof adapter.name, "string");
@@ -149,129 +149,6 @@ test("all chat providers expose the shared server-side adapter contract", () => 
     assert.equal(typeof adapter.chat, "function");
     assert.equal(typeof adapter.normalizeError, "function");
   }
-});
-
-test("Claude and Kimi catalog adapters use their own model endpoints and secret headers", async (context) => {
-  clearGatewayCatalogCache();
-  const requests = [];
-  setFetch(context, async (url, options) => {
-    requests.push({ url: String(url), headers: options.headers });
-    if (String(url).startsWith("https://api.anthropic.com/")) {
-      return Response.json({ data: [
-        { id: "claude-3-5-haiku-20241022", display_name: "Claude 3.5 Haiku" },
-        { id: "claude-3-5-sonnet-20241022", display_name: "Claude 3.5 Sonnet" },
-      ] });
-    }
-    return Response.json({ data: [
-      { id: "moonshot-v1-8k", name: "Moonshot V1 8K" },
-      { id: "kimi-k2-0905-preview", name: "Kimi K2" },
-    ] });
-  });
-
-  const catalog = await gatewayModelGroups({
-    anthropic: "claude-secret",
-    moonshot: "kimi-secret",
-  }, ["anthropic", "moonshot"]);
-  assert.deepEqual(requests.map(({ url }) => url), [
-    "https://api.anthropic.com/v1/models?limit=1000",
-    "https://api.moonshot.ai/v1/models",
-  ]);
-  assert.equal(requests[0].headers["x-api-key"], "claude-secret");
-  assert.equal(requests[0].headers["anthropic-version"], "2023-06-01");
-  assert.equal(requests[1].headers.Authorization, "Bearer kimi-secret");
-  assert.deepEqual(catalog.groups.map((group) => group.provider), ["gateway-anthropic", "gateway-moonshot"]);
-  const claudeModels = catalog.groups[0].models;
-  assert.equal(claudeModels.find((model) => /haiku/i.test(model.name)).accessTier, "pro");
-  assert.equal(claudeModels.find((model) => /sonnet/i.test(model.name)).accessTier, "max");
-  assert.equal(claudeModels.find((model) => /haiku/i.test(model.name)).imageSupport, true);
-  assert.equal(catalog.groups[1].models.find((model) => /k2/i.test(model.name)).accessTier, "max");
-});
-
-test("Claude adapter separates system text and encodes image input using Anthropic's message schema", () => {
-  const config = PROVIDER_ADAPTERS.anthropic.chat({
-    provider: "anthropic",
-    model: "claude-3-5-sonnet-20241022",
-    key: "claude-secret",
-    temperature: 0.2,
-    messages: [
-      { role: "system", content: "Answer naturally." },
-      { role: "user", content: "Describe this.", images: ["data:image/jpeg;base64,AA=="] },
-    ],
-  });
-  assert.equal(config.url, "https://api.anthropic.com/v1/messages");
-  assert.equal(config.headers["x-api-key"], "claude-secret");
-  assert.equal(config.headers["anthropic-version"], "2023-06-01");
-  assert.equal(config.body.system, "Answer naturally.");
-  assert.equal(config.body.max_tokens, 4096);
-  assert.equal(config.body.stream, true);
-  assert.deepEqual(config.body.messages[0].content[1], {
-    type: "image",
-    source: { type: "base64", media_type: "image/jpeg", data: "AA==" },
-  });
-
-  const kimi = PROVIDER_ADAPTERS.moonshot.chat({
-    provider: "moonshot",
-    model: "kimi-k2-0905-preview",
-    key: "kimi-secret",
-    messages: [{ role: "user", content: "Halo" }],
-  });
-  assert.equal(kimi.url, "https://api.moonshot.ai/v1/chat/completions");
-  assert.equal(kimi.headers.Authorization, "Bearer kimi-secret");
-  assert.equal(kimi.body.model, "kimi-k2-0905-preview");
-  assert.equal(kimi.body.stream, true);
-});
-
-test("Claude message events stream text and token usage through the normalized gateway format", async () => {
-  const source = [
-    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":0}}}',
-    'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Jawaban Claude"}}',
-    'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":4}}',
-    'event: message_stop\ndata: {"type":"message_stop"}',
-  ].join("\n\n") + "\n\n";
-  const response = await gatewayStreamResponse(new Response(source, {
-    headers: { "Content-Type": "text/event-stream" },
-  }), "anthropic");
-  const output = await response.text();
-  assert.match(output, /Jawaban Claude/);
-  assert.match(output, /"prompt_tokens":12/);
-  assert.match(output, /"completion_tokens":4/);
-  assert.match(output, /data: \[DONE\]/);
-});
-
-test("Claude chat runs through the gateway using its authenticated Messages API", async (context) => {
-  clearGatewayCatalogCache();
-  const requests = [];
-  const events = [
-    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":0}}}',
-    'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Halo dari Claude."}}',
-    'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":3}}',
-    'event: message_stop\ndata: {"type":"message_stop"}',
-  ].join("\n\n") + "\n\n";
-  setFetch(context, async (url, options) => {
-    requests.push({ url: String(url), headers: options.headers, body: options.body });
-    if (String(url).includes("/v1/models")) {
-      return Response.json({ data: [{ id: "claude-3-haiku", display_name: "Claude 3 Haiku" }] });
-    }
-    return new Response(events, { headers: { "Content-Type": "text/event-stream" } });
-  });
-  const response = await handleGatewayRequest(request({
-    provider: "anthropic",
-    model: "claude-3-haiku",
-    messages: [
-      { role: "system", content: "Be concise." },
-      { role: "user", content: "Say hello." },
-    ],
-  }), { anthropic: "claude-secret" }, PREMIUM_TEST_AUTH);
-
-  assert.equal(response.status, 200);
-  const output = await response.text();
-  assert.match(output, /Halo dari Claude\./);
-  assert.match(output, /"tokens":10/);
-  assert.equal(requests[0].headers["x-api-key"], "claude-secret");
-  assert.equal(requests[1].url, "https://api.anthropic.com/v1/messages");
-  assert.equal(requests[1].headers["anthropic-version"], "2023-06-01");
-  assert.equal(JSON.parse(requests[1].body).system, "Be concise.");
-  assert.doesNotMatch(output, /claude-secret/);
 });
 
 test("provider catalog test distinguishes working and rejected server-side secrets", async (context) => {
@@ -1693,13 +1570,14 @@ test("Claude and GPT model IDs route through OpenRouter with one key", async (co
   assert.equal(calls, 3);
 });
 
-test("OpenRouter catalog prioritizes Claude and GPT and never returns the API key", async (context) => {
+test("OpenRouter catalog orders OpenAI first and never returns the API key", async (context) => {
+  clearGatewayCatalogCache();
   setFetch(context, async () => Response.json(openRouterCatalog()));
   const { groups, errors } = await gatewayModelGroups({ openrouter: "private-secret" }, ["openrouter"]);
   assert.deepEqual(errors, []);
-  assert.deepEqual(groups[0].models.map((model) => model.id), ["anthropic/claude-sonnet-4", "openai/gpt-4o", "meta/llama-4-scout"]);
-  assert.equal(groups[0].models[0].priceTier, "check");
-  assert.equal(groups[0].models[0].contextWindow, 200000);
+  assert.deepEqual(groups[0].models.map((model) => model.id), ["openai/gpt-4o", "anthropic/claude-sonnet-4", "meta/llama-4-scout"]);
+  assert.equal(groups[0].models[1].priceTier, "check");
+  assert.equal(groups[0].models[1].contextWindow, 200000);
   assert.deepEqual(groups[0].models.map((model) => model.accessTier), ["max", "max", "pro"]);
   assert.equal(JSON.stringify(groups).includes("private-secret"), false);
 });

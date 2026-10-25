@@ -34,3 +34,26 @@ test("Pages static responses do not grant CORS to unrelated origins", async () =
   assert.equal(response.headers.get("Content-Type"), "application/javascript");
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), null);
 });
+
+test("Pages forwards guest configuration requests to the Worker", async () => {
+  const originalFetch = globalThis.fetch;
+  let upstreamUrl;
+  globalThis.fetch = async (request) => {
+    upstreamUrl = request.url;
+    return new Response(JSON.stringify({ turnstileSiteKey: "test-site-key" }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    const response = await pagesWorker.fetch(new Request(
+      "https://myai-v3-firmansyah.pages.dev/api/guest/config",
+    ), { ASSETS: { fetch: () => new Response("unexpected static fallback", { status: 500 }) } });
+
+    assert.equal(upstreamUrl, "https://myai-v3-free-api.firmansyahazharikuy6.workers.dev/guest/config");
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { turnstileSiteKey: "test-site-key" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

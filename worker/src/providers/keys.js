@@ -1,4 +1,4 @@
-const PROVIDER_KEY_NAMES = ["openrouter", "gemini", "groq", "nvidia", "anthropic", "moonshot", "monid", "explorium"];
+const PROVIDER_KEY_NAMES = ["openrouter", "gemini", "groq", "nvidia", "monid", "explorium"];
 
 export function readProviderKeys(raw, env, HttpError) {
   const keys = {};
@@ -8,12 +8,6 @@ export function readProviderKeys(raw, env, HttpError) {
     nvidia_nim: "nvidia",
     nvidia_nim_api_key: "nvidia",
     nvidia_api_key: "nvidia",
-    claude: "anthropic",
-    anthropic_api_key: "anthropic",
-    claude_api_key: "anthropic",
-    kimi: "moonshot",
-    moonshot_api_key: "moonshot",
-    kimi_api_key: "moonshot",
     monid_api_key: "monid",
     explorium_api_key: "explorium",
     openrouter_api_key: "openrouter",
@@ -44,8 +38,6 @@ export function readProviderKeys(raw, env, HttpError) {
     gemini: firstConfiguredSecret(env.GEMINI_API_KEY),
     groq: firstConfiguredSecret(env.GROQ_API_KEY),
     nvidia: firstConfiguredSecret(env.NVIDIA_API_KEY, env.NVIDIA_NIM_API_KEY),
-    anthropic: firstConfiguredSecret(env.CLAUDE_API_KEY, env.ANTHROPIC_API_KEY),
-    moonshot: firstConfiguredSecret(env.KIMI_API_KEY, env.MOONSHOT_API_KEY),
     monid: firstConfiguredSecret(env.MONID_API_KEY),
     explorium: firstConfiguredSecret(env.EXPLORIUM_API_KEY),
   };

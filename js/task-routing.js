@@ -1,4 +1,4 @@
-const DOCUMENT_PROVIDERS = new Set(["openrouter", "gemini", "kimi", "moonshot", "groq", "nvidia"]);
+const DOCUMENT_PROVIDERS = new Set(["openrouter", "gemini", "groq", "nvidia"]);
 const MAX_FALLBACK_ATTEMPTS = 4;
 const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_COOLDOWN_MS = 60_000;
@@ -21,10 +21,9 @@ export function rankDocumentModels(groups, providerHealth = {}) {
       const priority = provider === "nvidia" ? 0
         : provider === "openrouter" && /(?:anthropic\/|claude)/i.test(`${id} ${name}`) ? 1
           : provider === "gemini" && /pro/i.test(`${id} ${name}`) ? 2
-            : ["kimi", "moonshot"].includes(provider) ? 3
-              : provider === "gemini" ? 4
-                : provider === "openrouter" ? 5
-                  : provider === "groq" ? 6 : 7;
+            : provider === "gemini" ? 3
+              : provider === "openrouter" ? 4
+                : provider === "groq" ? 5 : 6;
       models.push({ ...model, provider: group.provider, priority });
     }
   }
