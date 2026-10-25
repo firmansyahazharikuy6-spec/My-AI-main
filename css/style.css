@@ -2829,25 +2829,50 @@ button:disabled { opacity: .75; }
 .personalization-display-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  align-items: stretch;
+  gap: 14px;
 }
 .personalization-control {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   gap: 12px;
   min-width: 0;
-  min-height: 52px;
-  padding: 8px 10px;
+  min-height: 126px;
+  padding: 16px;
   border: 1px solid var(--group-border);
-  border-radius: 12px;
+  border-radius: 18px;
   background: var(--group-surface);
 }
-.personalization-control > span { color: var(--group-text); font-size: 11.5px; font-weight: 700; }
-.personalization-language .language-control { margin-left: auto; }
+.personalization-control > span { color: var(--group-text); font-size: 14px; font-weight: 750; }
+.personalization-language .language-control { width: 100%; margin-left: 0; }
 .personalization-language .language-menu { right: 0; left: auto; }
-.personalization-language-picker { min-width: 142px; background: var(--glass); }
-.personalization-theme .theme-toggle { width: 36px; height: 36px; flex: 0 0 36px; margin: 0; font-size: 16px; }
+.personalization-language-picker {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: var(--glass);
+}
+.personalization-theme .theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+}
+.theme-toggle-icon { font-size: 18px; line-height: 1; }
 
 @media (max-width: 800px) {
   .composer { width: calc(100% - 18px); min-height: 100px; }
@@ -2857,7 +2882,7 @@ button:disabled { opacity: .75; }
   .composer { width: calc(100% - 12px); padding-inline: 8px; }
   .composer textarea { height: 38px; min-height: 38px; }
   .personalization-display-controls { grid-template-columns: 1fr; }
-  .personalization-language-picker { min-width: 132px; }
+  .personalization-control { min-height: 0; padding: 14px; }
   #languageButton #languageButtonLabel,
   .personalization-language-picker .language-chevron { display: block !important; }
 }
@@ -4860,11 +4885,9 @@ body { font-size: 16px; }
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .personalization-dialog .personalization-control {
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  gap: 6px;
-  min-height: 76px;
+  min-height: 126px;
+  justify-content: flex-start;
+  gap: 12px;
 }
 .personalization-dialog .personalization-language .language-control {
   width: 100%;
@@ -4878,7 +4901,7 @@ body { font-size: 16px; }
   justify-content: space-between;
 }
 .personalization-dialog .personalization-theme .theme-toggle {
-  align-self: flex-start;
+  align-self: stretch;
 }
 
 dialog:not(.voice-chat-dialog):not(.html-preview-dialog):not(.file-preview-dialog):not(.image-lightbox-dialog) {

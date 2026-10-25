@@ -5271,9 +5271,21 @@ function applyTheme(theme) {
   document.documentElement.dataset.theme = chosen;
   localStorage.setItem("myai_theme", chosen);
   const label = chosen === "dark" ? "☀️" : "🌙";
+  const nextThemeLabel = chosen === "dark" ? translateText("themeLight") : translateText("themeDark");
   ["themeToggle", "landingTheme"].forEach((id) => {
     const el = $(id);
-    if (el) { el.textContent = label; el.title = chosen === "dark" ? "Aktifkan tema terang" : "Aktifkan tema gelap"; }
+    if (el) {
+      const icon = el.querySelector(".theme-toggle-icon");
+      if (icon) {
+        icon.textContent = label;
+        const text = el.querySelector("#themeToggleLabel");
+        if (text) text.textContent = nextThemeLabel;
+      } else {
+        el.textContent = label;
+      }
+      el.title = chosen === "dark" ? "Aktifkan tema terang" : "Aktifkan tema gelap";
+      if (id === "themeToggle") el.setAttribute("aria-label", el.title);
+    }
   });
 }
 
@@ -6314,6 +6326,7 @@ function bindEvents() {
   $("languageSelect").addEventListener("change", (event) => {
     saveLanguage(event.target.value);
     localStorage.setItem("myai_selected_lang", event.target.value);
+    applyTheme(document.documentElement.dataset.theme);
     applyAuthLanguage();
     updateTierPicker();
     updateCompressorMenuLabel();
