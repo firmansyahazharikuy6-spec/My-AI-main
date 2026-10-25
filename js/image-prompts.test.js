@@ -137,6 +137,20 @@ test("image result label metadata reflects the selected Pollinations model (MOCK
   assert.match(decodeURIComponent(url.pathname), /Indonesian Independence Day/);
 });
 
+test("image fallback resolution pins Pollinations to 768 square (MOCK)", async () => {
+  const chunks = [];
+  for await (const chunk of streamChat("pollinations", "flux", [
+    { role: "user", content: "Create a quiet forest scene." },
+  ], {
+    imageGeneration: true,
+    imageFallbackReason: "Gemini returned HTTP 500.",
+    imageFallbackResolution: "768x768",
+  }, new AbortController().signal)) chunks.push(chunk);
+  const url = new URL(chunks.find((chunk) => chunk.image).image);
+  assert.equal(url.searchParams.get("width"), "768");
+  assert.equal(url.searchParams.get("height"), "768");
+});
+
 test("Pollinations URL preserves reserved prompt characters without changing query parameters (MOCK)", async () => {
   const rawPrompt = "draw a robot & a cat? beside a 100% moon";
   const plan = buildFallbackImagePromptPlan(rawPrompt);
@@ -154,4 +168,20 @@ test("Pollinations URL preserves reserved prompt characters without changing que
   assert.equal(url.searchParams.get("fake"), null);
   assert.match(url.pathname, /%26/);
   assert.match(url.pathname, /%3F/);
+});
+
+test("image fallback uses the requested 768 by 768 Pollinations resolution (MOCK)", async () => {
+  let imageChunk;
+  for await (const chunk of streamChat("pollinations", "flux", [
+    { role: "user", content: "gambar ilustrasi sederhana" },
+  ], {
+    imageGeneration: true,
+    imageFallbackResolution: "768x768",
+    imagePromptPlan: buildFallbackImagePromptPlan("gambar ilustrasi sederhana"),
+  }, new AbortController().signal)) {
+    if (chunk.image) imageChunk = chunk;
+  }
+  const url = new URL(imageChunk.image);
+  assert.equal(url.searchParams.get("width"), "768");
+  assert.equal(url.searchParams.get("height"), "768");
 });

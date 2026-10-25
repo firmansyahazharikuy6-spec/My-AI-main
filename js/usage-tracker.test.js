@@ -85,6 +85,20 @@ test("provider health supports idle, switching, and red error states", () => {
   assert.equal(tracker.getHealth().openrouter.latencyMs, 900);
 });
 
+test("provider health persists bounded token throughput telemetry", () => {
+  const local = createStorage();
+  const tracker = createUsageTracker({ local, session: createStorage(), now: () => 2000 });
+  tracker.markProviderStatus("nvidia", "HEALTHY", {
+    latencyMs: 420,
+    tokensPerSecond: 38.6,
+    used: true,
+  });
+  assert.equal(tracker.getHealth().nvidia.latencyMs, 420);
+  assert.equal(tracker.getHealth().nvidia.tokensPerSecond, 38.6);
+  tracker.markProviderStatus("nvidia", "HEALTHY", { tokensPerSecond: 999999 });
+  assert.equal(tracker.getHealth().nvidia.tokensPerSecond, 100000);
+});
+
 test("unreachable provider state persists and malformed telemetry is normalized", () => {
   const local = createStorage();
   const session = createStorage();

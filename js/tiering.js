@@ -8,8 +8,8 @@ export const TIER_CARDS = [
     theme: "cyan",
     status: "Aktif",
     button: "Gunakan paket Free",
-    features: ["Model gratis dari provider aktif", "Chat dan pembuatan gambar dasar", "Cocok untuk kebutuhan harian"],
-    models: [{ name: "Gemini Flash / Groq", logo: "⚡" }, { name: "OpenRouter Free", logo: "◎" }],
+    features: ["Akses model dasar termasuk NVIDIA NIM", "Chat dan pembuatan gambar dasar", "Kuota/biaya mengikuti provider aktif"],
+    models: [{ name: "NVIDIA NIM dasar", logo: "▣" }, { name: "Gemini Flash / Groq", logo: "⚡" }, { name: "OpenRouter Free", logo: "◎" }],
   },
   {
     id: "basic",

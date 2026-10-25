@@ -236,8 +236,8 @@ function presentationSections(blocks, structuredSlides = null, requestedSlideCou
 
 async function exportPowerPoint(title, blocks, structuredSlides = null, theme = "clean-light", requestedSlideCount = null, options = {}) {
   const imported = await (options.libraryLoader
-    ? options.libraryLoader("pptxgenjs", "https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/+esm")
-    : import("https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/+esm"));
+    ? options.libraryLoader("pptxgenjs")
+    : import("pptxgenjs"));
   const PptxGenJS = imported.default || imported;
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
@@ -281,7 +281,9 @@ async function exportPowerPoint(title, blocks, structuredSlides = null, theme = 
     "clean-light": { cover: "173B36", background: "FFFFFF", ink: "173B36", accent: "4D6BFE" },
   };
   Object.assign(colors, themeColors[theme] || themeColors["clean-light"]);
-  const hasStructuredSlides = Array.isArray(structuredSlides) && structuredSlides.length > 0;
+  let hasStructuredSlides = Array.isArray(structuredSlides) && structuredSlides.length > 0;
+  const sections = presentationSections(blocks, structuredSlides, requestedSlideCount);
+  if (requestedSlideCount === 2 && hasStructuredSlides && sections.length === 1) hasStructuredSlides = false;
   if (!hasStructuredSlides) {
     const cover = pptx.addSlide();
     cover.background = { color: colors.cover };
@@ -296,7 +298,6 @@ async function exportPowerPoint(title, blocks, structuredSlides = null, theme = 
     cover.addText("MYAI", { x: 11.15, y: 6.48, w: 1.2, h: 0.35, fontFace: "Aptos Display", fontSize: 15, bold: true, color: colors.white, align: "right", margin: 0 });
   }
 
-  const sections = presentationSections(blocks, structuredSlides, requestedSlideCount);
   const totalSlides = sections.length + Number(!hasStructuredSlides);
   sections.forEach((section, index) => {
     const slide = pptx.addSlide();
@@ -561,7 +562,7 @@ function saveBlob(blob, filename) {
 }
 
 export async function exportAssistantDocument(
-  { content, title, citations = [], structuredSlides, theme, sheetName, structuredTable },
+  { content, title, citations = [], structuredSlides, theme, requestedSlideCount, sheetName, structuredTable },
   format,
   options = {},
 ) {
@@ -569,7 +570,7 @@ export async function exportAssistantDocument(
   const blocks = withSources(blocksFromMarkdown(markdown), citations);
   const documentTitle = answerTitle(title, blocks);
   if (format === "docx") return exportWord(documentTitle, blocks, options);
-  if (format === "pptx") return exportPowerPoint(documentTitle, blocks, structuredSlides, theme, options.requestedSlideCount, options);
+  if (format === "pptx") return exportPowerPoint(documentTitle, blocks, structuredSlides, theme, requestedSlideCount, options);
   if (format === "xlsx") return exportSpreadsheet(documentTitle, blocks, sheetName, structuredTable, options);
   if (format === "pdf") return exportPdf(documentTitle, blocks, options);
   throw new Error("Format dokumen tidak didukung.");

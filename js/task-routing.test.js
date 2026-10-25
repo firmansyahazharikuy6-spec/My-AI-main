@@ -16,10 +16,31 @@ test("document routing uses only live catalog models and prefers long-context pr
       { id: "anthropic/claude-sonnet", name: "Claude Sonnet", contextWindow: 200000 },
       { id: "google/gemini-flash", name: "Gemini Flash", contextWindow: 100000 },
     ] },
-    { provider: "server-gemini-image", models: [{ id: "image-only", name: "Image", imageOnly: true }] },
+    { provider: "gemini", models: [{ id: "image-only", name: "Image", imageOnly: true }] },
   ]);
   assert.deepEqual(ranked.map(({ id }) => id), ["anthropic/claude-sonnet", "llama-fast"]);
   assert.equal(canonicalProvider("gateway-gemini"), "gemini");
+});
+
+test("document routing prioritizes providers that recently completed a live request", () => {
+  const ranked = rankDocumentModels([
+    { provider: "gateway-openrouter", models: [{ id: "claude", name: "Claude", contextWindow: 200000 }] },
+    { provider: "gateway-gemini", models: [{ id: "gemini-flash", name: "Gemini Flash", contextWindow: 100000 }] },
+  ], { gemini: { status: "HEALTHY" } });
+  assert.deepEqual(ranked.map(({ id }) => id), ["gemini-flash", "claude"]);
+});
+
+test("document routing prefers available NVIDIA NIM and falls back when it is unhealthy", () => {
+  const groups = [
+    { provider: "gateway-gemini", models: [{ id: "gemma-3", name: "Gemma 3", contextWindow: 100000 }] },
+    { provider: "gateway-nvidia", models: [{ id: "nvidia/nemotron", name: "Nemotron", contextWindow: 32768 }] },
+    { provider: "gateway-groq", models: [{ id: "llama", name: "Llama", contextWindow: 32768 }] },
+  ];
+  assert.deepEqual(rankDocumentModels(groups).map(({ id }) => id), ["nvidia/nemotron", "gemma-3", "llama"]);
+  assert.deepEqual(rankDocumentModels(groups, {
+    nvidia: { status: "UNREACHABLE" },
+    groq: { status: "HEALTHY" },
+  }).map(({ id }) => id), ["llama", "gemma-3", "nvidia/nemotron"]);
 });
 
 test("fallback runs the next provider once after simulated 429 and labels its selection", async () => {

@@ -29,40 +29,68 @@ test("language guard rejects English output for an Indonesian draft", () => {
 
 test("prompt helper rejects leaked profile context, excessive output, and repeated lines", () => {
   assert.equal(promptHelperOutputIsUsable("Mode kerja aktif: flash\nUser Name: [Your Name]", "buat jadwal belajar"), false);
+  assert.equal(promptHelperOutputIsUsable("Tentu, berikut prompt yang diperbaiki:", "buat jadwal belajar"), false);
   assert.equal(promptHelperOutputIsUsable("This sentence is repeated as model filler and should not be shown.\nThis sentence is repeated as model filler and should not be shown.", "make a plan"), false);
   assert.equal(promptHelperOutputIsUsable("x".repeat(2500), "short prompt"), false);
   assert.equal(promptHelperOutputIsUsable("Tujuan: buat jadwal belajar Python selama 4 minggu.", "buat jadwal belajar Python selama 4 minggu"), true);
 });
 
 test("suggestion parser accepts fenced JSON and explanatory text", () => {
-  const result = parsePromptSuggestions('Berikut saran:\n```json\n{"suggestions":["Satu","Dua","Tiga"]}\n```\nSemoga membantu.');
-  assert.deepEqual(result, ["Satu", "Dua", "Tiga"]);
+  const result = parsePromptSuggestions('Berikut saran:\n```json\n{"suggestions":["Tambahkan contoh praktis yang relevan","Sertakan batasan dan kriteria keberhasilan","Susun hasil berdasarkan prioritas dan kebutuhan"]}\n```\nSemoga membantu.');
+  assert.deepEqual(result, [
+    "Tambahkan contoh praktis yang relevan",
+    "Sertakan batasan dan kriteria keberhasilan",
+    "Susun hasil berdasarkan prioritas dan kebutuhan",
+  ]);
 });
 
 test("suggestion parser accepts numbered text and caps results at three", () => {
-  assert.deepEqual(parsePromptSuggestions("1. Alpha\n2. Beta\n3. Gamma\n4. Delta"), ["Alpha", "Beta", "Gamma"]);
+  assert.deepEqual(parsePromptSuggestions([
+    "1. Tambahkan contoh praktis yang relevan",
+    "2. Sertakan batasan dan kriteria keberhasilan",
+    "3. Susun hasil berdasarkan prioritas dan kebutuhan",
+    "4. Uraikan tujuan dan langkah berikutnya",
+  ].join("\n")), [
+    "Tambahkan contoh praktis yang relevan",
+    "Sertakan batasan dan kriteria keberhasilan",
+    "Susun hasil berdasarkan prioritas dan kebutuhan",
+  ]);
 });
 
-test("suggestions are limited to eight words in model and local fallbacks", () => {
+test("suggestions contain five or six words in model and local fallbacks", () => {
   const parsed = parsePromptSuggestions(JSON.stringify([
-    "Tambahkan contoh praktis yang relevan dengan kebutuhan dan konteks pengguna",
-    "Susun langkah kerja yang jelas berdasarkan prioritas dan batasan",
-    "Jelaskan hasil dengan format ringkas dan kriteria keberhasilan terukur",
+    "Tambahkan contoh praktis yang relevan",
+    "Susun langkah kerja berdasarkan prioritas",
+    "Jelaskan hasil dengan kriteria keberhasilan",
   ]));
   assert.equal(parsed.length, 3);
-  assert.ok(parsed.every((suggestion) => suggestion.split(/\s+/).length <= 8));
-  assert.ok(localPromptContinuations("prompt", "id").every((suggestion) => suggestion.split(/\s+/).length <= 8));
-  assert.ok(localPromptContinuations("prompt", "en").every((suggestion) => suggestion.split(/\s+/).length <= 8));
+  assert.ok(parsed.every((suggestion) => [5, 6].includes(suggestion.split(/\s+/).length)));
+  assert.ok(localPromptContinuations("prompt", "id").every((suggestion) => [5, 6].includes(suggestion.split(/\s+/).length)));
+  assert.ok(localPromptContinuations("prompt", "en").every((suggestion) => [5, 6].includes(suggestion.split(/\s+/).length)));
+  assert.deepEqual(parsePromptSuggestions(JSON.stringify(["Satu dua tiga empat", "Tambahkan contoh praktis yang relevan", "Susun hasil berdasarkan prioritas dan kebutuhan"])), [
+    "Tambahkan contoh praktis yang relevan",
+    "Susun hasil berdasarkan prioritas dan kebutuhan",
+  ]);
 });
 
 test("local helper fallbacks preserve Indonesian and the user's prompt", () => {
   const improved = localImprovedPrompt("buat rencana belajar coding", "id");
   const suggestions = localPromptSuggestions("buat rencana belajar coding", "id");
-  assert.match(improved, /Tujuan: buat rencana belajar coding/);
+  assert.match(improved, /Tugas: buat rencana belajar coding/);
   assert.match(improved, /Susun hasil yang jelas, profesional, dan siap digunakan/);
+  assert.match(improved, /Format keluaran:/);
+  assert.doesNotMatch(improved, /\?/);
   assert.doesNotMatch(improved, /\[[^\]]+\]/);
   assert.equal(suggestions.length, 3);
   assert.ok(suggestions.every((suggestion) => suggestion.includes("buat rencana belajar coding")));
+});
+
+test("local prompt optimizer turns casual greetings into a request without replying to them", () => {
+  const result = localImprovedPrompt("Hai, saya mau tanya", "id");
+  assert.match(result, /tawarkan bantuan/);
+  assert.match(result, /jangan mengasumsikan topiknya/);
+  assert.doesNotMatch(result, /^(?:Hai|Halo|Berikut)/i);
+  assert.doesNotMatch(result, /\?/);
 });
 
 test("offline response stays honest and useful for chat, image, and presentation requests", () => {

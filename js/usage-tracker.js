@@ -161,6 +161,7 @@ export function createUsageTracker({
       ...(options.detail ? { detail: String(options.detail).slice(0, 600) } : {}),
       ...(options.model ? { model: String(options.model).slice(0, 120) } : {}),
       ...(Number.isFinite(options.latencyMs) ? { latencyMs: Math.max(0, Math.round(options.latencyMs)) } : {}),
+      ...(Number.isFinite(options.tokensPerSecond) ? { tokensPerSecond: Math.max(0, Math.min(100000, options.tokensPerSecond)) } : {}),
       ...(options.used === true ? { used: true } : {}),
     };
     savePersistent(data);
@@ -177,6 +178,7 @@ export function createUsageTracker({
           updatedAt: now(),
           ...(state.model ? { model: state.model } : {}),
           ...(Number.isFinite(state.latencyMs) ? { latencyMs: state.latencyMs } : {}),
+          ...(Number.isFinite(state.tokensPerSecond) ? { tokensPerSecond: state.tokensPerSecond } : {}),
           ...(state.used ? { used: true } : {}),
         };
         changed = true;
@@ -224,6 +226,7 @@ export function createUsageTracker({
         ...(typeof state.detail === "string" ? { detail: state.detail.slice(0, 160) } : {}),
         ...(typeof state.model === "string" ? { model: state.model.slice(0, 120) } : {}),
         ...(state.latencyMs != null && Number.isFinite(Number(state.latencyMs)) ? { latencyMs: Math.max(0, Math.round(Number(state.latencyMs))) } : {}),
+        ...(state.tokensPerSecond != null && Number.isFinite(Number(state.tokensPerSecond)) ? { tokensPerSecond: Math.max(0, Math.min(100000, Number(state.tokensPerSecond))) } : {}),
         ...(state.used === true ? { used: true } : {}),
       }]));
     savePersistent(data);

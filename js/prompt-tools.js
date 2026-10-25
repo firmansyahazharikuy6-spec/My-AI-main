@@ -10,12 +10,13 @@ const LANGUAGE_WORDS = {
   ]),
 };
 
-function normalizeSuggestion(value, maxWords = 8) {
-  return String(value || "").trim()
+function normalizeSuggestion(value) {
+  const suggestion = String(value || "").trim()
     .replace(/^(["'])|(["'])$/g, "")
     .split(/\s+/)
-    .slice(0, maxWords)
     .join(" ");
+  const wordCount = suggestion ? suggestion.split(/\s+/).length : 0;
+  return wordCount >= 5 && wordCount <= 6 ? suggestion : "";
 }
 
 export function detectPromptLanguage(text, fallback = "en") {
@@ -46,6 +47,7 @@ export function promptHelperOutputIsUsable(text, prompt) {
   const maxLength = Math.min(12000, Math.max(2400, String(prompt || "").length * 5 + 1000));
   if (!output || output.length > maxLength) return false;
   if (/\b(?:mode kerja aktif|user name|user role|user profile|preferences)\s*:/i.test(output)) return false;
+  if (/^(?:tentu\b|berikut(?: adalah)?\b|ini dia\b|saya telah\b|sure\b|here(?: is|'s)\b|the improved prompt\b|prompt yang diperbaiki\b)/i.test(output)) return false;
 
   const lines = output.split(/\r?\n/)
     .map((line) => line.toLowerCase().replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").replace(/\s+/g, " ").trim())
@@ -124,10 +126,17 @@ export function localPromptSuggestions(prompt, language = "en") {
 }
 
 export function localImprovedPrompt(prompt, language = "en") {
-  if (language === "id") {
-    return `Tujuan: ${prompt}\n\nSusun hasil yang jelas, profesional, dan siap digunakan. Tambahkan konteks, batasan, contoh, serta format keluaran hanya jika relevan. Pertahankan fakta dan maksud pengguna; jangan mengarang detail. Jika informasi penting belum tersedia, ajukan pertanyaan klarifikasi.`;
+  const draft = String(prompt || "").trim();
+  if (/^(?:hai|halo|hello|hi|hey)(?:[\s,!.?]+.*)?$/i.test(draft)
+    && /\b(?:tanya|bertanya|ask|question|help|bantu)\b/i.test(draft)) {
+    return language === "id"
+      ? "Sapa saya dengan ramah dan tawarkan bantuan secara singkat. Tunggu sampai saya menjelaskan pertanyaan atau kebutuhan; jangan mengasumsikan topiknya."
+      : "Greet me warmly and offer brief help. Wait for me to explain my question or need; do not assume the topic.";
   }
-  return `Goal: ${prompt}\n\nMake the result clear, professional, and ready to use. Add context, constraints, examples, and an output format only when relevant. Preserve the user's intent and stated facts; do not invent details. Ask a clarifying question if essential information is missing.`;
+  if (language === "id") {
+    return `Tugas: ${draft}\n\nKonteks: Gunakan hanya fakta dan informasi yang diberikan.\nInstruksi: Susun hasil yang jelas, profesional, dan siap digunakan. Tambahkan batasan atau contoh hanya jika relevan. Jangan mengubah maksud atau mengarang detail; tandai informasi penting yang belum tersedia.\nFormat keluaran: Sajikan hasil dalam format yang paling sesuai dengan tugas.`;
+  }
+  return `Task: ${draft}\n\nContext: Use only the facts and information provided.\nInstructions: Produce a clear, professional, ready-to-use result. Add constraints or examples only when relevant. Preserve the user's intent and do not invent details; identify essential information that is missing.\nOutput format: Present the result in the format best suited to the task.`;
 }
 
 export function localOfflineResponse(prompt, {

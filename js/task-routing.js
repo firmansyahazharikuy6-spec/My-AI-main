@@ -9,7 +9,7 @@ export function canonicalProvider(provider) {
   return String(provider || "").replace(/^gateway-/, "").toLowerCase();
 }
 
-export function rankDocumentModels(groups) {
+export function rankDocumentModels(groups, providerHealth = {}) {
   const models = [];
   for (const group of Array.isArray(groups) ? groups : []) {
     const provider = canonicalProvider(group.provider);
@@ -18,16 +18,32 @@ export function rankDocumentModels(groups) {
       if (!model?.id || model.imageOnly === true) continue;
       const id = String(model.id);
       const name = String(model.name || "");
-      const priority = provider === "openrouter" && /(?:anthropic\/|claude)/i.test(`${id} ${name}`) ? 0
-        : provider === "gemini" && /pro/i.test(`${id} ${name}`) ? 1
-          : ["kimi", "moonshot"].includes(provider) ? 2
-            : provider === "gemini" ? 3
-            : provider === "openrouter" ? 4
-              : provider === "groq" ? 5 : 6;
+      const priority = provider === "nvidia" ? 0
+        : provider === "openrouter" && /(?:anthropic\/|claude)/i.test(`${id} ${name}`) ? 1
+          : provider === "gemini" && /pro/i.test(`${id} ${name}`) ? 2
+            : ["kimi", "moonshot"].includes(provider) ? 3
+              : provider === "gemini" ? 4
+                : provider === "openrouter" ? 5
+                  : provider === "groq" ? 6 : 7;
       models.push({ ...model, provider: group.provider, priority });
     }
   }
-  models.sort((left, right) => left.priority - right.priority
+  const isHealthy = (model) => {
+    const provider = canonicalProvider(model.provider);
+    return providerHealth[provider]?.status === "HEALTHY"
+      || providerHealth[`gateway-${provider}`]?.status === "HEALTHY";
+  };
+  const isUnavailable = (model) => {
+    const provider = canonicalProvider(model.provider);
+    const status = providerHealth[provider]?.status || providerHealth[`gateway-${provider}`]?.status;
+    return ["ERROR", "EXHAUSTED", "UNREACHABLE"].includes(status);
+  };
+  const nvidiaPriority = (model) => canonicalProvider(model.provider) === "nvidia"
+    ? isUnavailable(model) ? 2 : 0
+    : 1;
+  models.sort((left, right) => nvidiaPriority(left) - nvidiaPriority(right)
+    || Number(isHealthy(right)) - Number(isHealthy(left))
+    || left.priority - right.priority
     || (Number(right.contextWindow) || 0) - (Number(left.contextWindow) || 0)
     || String(left.name || left.id).localeCompare(String(right.name || right.id)));
   const seen = new Set();

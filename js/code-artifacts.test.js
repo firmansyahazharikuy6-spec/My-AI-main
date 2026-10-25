@@ -13,6 +13,8 @@ test("code artifacts expose readable labels and safe download extensions", () =>
   assert.equal(codeLanguageLabel(""), "Plaintext");
   assert.equal(codeFileExtension("tsx"), "tsx");
   assert.equal(codeFileExtension("unknown"), "txt");
+  assert.equal(codeLanguageLabel("mermaid"), "Mermaid");
+  assert.equal(codeFileExtension("mermaid"), "mmd");
 });
 
 test("live preview is enabled only for supported web languages and SVG XML", () => {
@@ -21,7 +23,17 @@ test("live preview is enabled only for supported web languages and SVG XML", () 
   assert.equal(supportsCodePreview("javascript"), true);
   assert.equal(supportsCodePreview("xml", "<svg viewBox='0 0 1 1'></svg>"), true);
   assert.equal(supportsCodePreview("xml", "<root/>"), false);
+  assert.equal(supportsCodePreview("mermaid", "flowchart TD\n  A --> B"), true);
   assert.equal(supportsCodePreview("python"), false);
+});
+
+test("Mermaid preview escapes diagram text and uses strict sandbox-compatible rendering", () => {
+  const document = buildCodePreviewDocument("flowchart TD\nA[<script>alert(1)</script>] --> B", "mermaid");
+  assert.match(document, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(document, /<script>alert\(1\)<\/script>/);
+  assert.match(document, /mermaid@11\/dist\/mermaid\.min\.js/);
+  assert.match(document, /securityLevel:"strict"/);
+  assert.match(document, /connect-src 'none'/);
 });
 
 test("preview documents sandbox network access and safely embed script/style snippets", () => {
@@ -66,6 +78,17 @@ test("live artifact combines HTML, CSS, and JavaScript inside the sandbox docume
   assert.match(document, /renderMathInElement\(document\.body/);
   assert.match(document, /background-color:#0f1015/);
   assert.match(document, /script-src 'unsafe-inline' https:\/\/cdn\.jsdelivr\.net/);
+});
+
+test("live artifact renders Mermaid diagrams alongside HTML", () => {
+  const document = buildLiveArtifactDocument([
+    { lang: "html", source: "<html><head></head><body><h1>Diagram</h1></body></html>" },
+    { lang: "mermaid", source: "flowchart TD\nA[Start] --> B[End]" },
+  ]);
+  assert.match(document, /<h1>Diagram<\/h1>/);
+  assert.match(document, /<pre class="mermaid">flowchart TD\nA\[Start\] --&gt; B\[End\]<\/pre>/);
+  assert.match(document, /mermaid@11\/dist\/mermaid\.min\.js/);
+  assert.match(document, /securityLevel:"strict"/);
 });
 
 test("Markdown artifacts render as escaped text without executing embedded HTML", () => {

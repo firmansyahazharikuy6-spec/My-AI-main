@@ -12,6 +12,7 @@ const LANGUAGE_LABELS = {
   json: "JSON",
   jsx: "JSX",
   md: "Markdown",
+  mermaid: "Mermaid",
   mjs: "JavaScript",
   php: "PHP",
   py: "Python",
@@ -32,12 +33,13 @@ const LANGUAGE_LABELS = {
 const EXTENSIONS = {
   bash: "sh", c: "c", cpp: "cpp", cs: "cs", css: "css", go: "go", htm: "html",
   html: "html", java: "java", js: "js", json: "json", jsx: "jsx", md: "md", mjs: "mjs",
-  php: "php", py: "py", rb: "rb", rs: "rs", scss: "scss", sh: "sh", svg: "svg",
+  mermaid: "mmd", php: "php", py: "py", rb: "rb", rs: "rs", scss: "scss", sh: "sh", svg: "svg",
   text: "txt", ts: "ts", tsx: "tsx", txt: "txt", xml: "xml", yaml: "yaml", yml: "yml",
 };
 
-const PREVIEW_LANGUAGES = new Set(["css", "html", "htm", "js", "javascript", "md", "markdown", "mjs", "svg", "xml"]);
+const PREVIEW_LANGUAGES = new Set(["css", "html", "htm", "js", "javascript", "md", "markdown", "mermaid", "mjs", "svg", "xml"]);
 const KATEX_CDN = "https://cdn.jsdelivr.net";
+const MERMAID_CDN = `${KATEX_CDN}/npm/mermaid@11/dist/mermaid.min.js`;
 const PREVIEW_CSP = `default-src 'none'; script-src 'unsafe-inline' ${KATEX_CDN}; style-src 'unsafe-inline' ${KATEX_CDN}; img-src data: blob:; font-src data: ${KATEX_CDN}; media-src data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
 const KATEX_HEAD = `<link rel="stylesheet" href="${KATEX_CDN}/npm/katex@0.16.8/dist/katex.min.css"><script src="${KATEX_CDN}/npm/katex@0.16.8/dist/katex.min.js"><\/script><script src="${KATEX_CDN}/npm/katex@0.16.8/dist/contrib/auto-render.min.js"><\/script>`;
 const DISPLAY_MATH_DELIMITER = String.fromCharCode(36).repeat(2);
@@ -81,6 +83,26 @@ function htmlDocument(source) {
   return `<!doctype html><html lang="id"><head><meta charset="utf-8">${policy}<meta name="viewport" content="width=device-width,initial-scale=1"></head><body>${text}</body></html>`;
 }
 
+function escapeHtml(source) {
+  return String(source || "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  })[character]);
+}
+
+function appendToBody(source, markup) {
+  return /<\/body>/i.test(source)
+    ? source.replace(/<\/body>/i, `${markup}</body>`)
+    : `${source}${markup}`;
+}
+
+function mermaidRuntime(source) {
+  return appendToBody(source, `<script src="${MERMAID_CDN}"><\/script><script>document.addEventListener("DOMContentLoaded",function(){if(typeof mermaid==="undefined")return;mermaid.initialize({startOnLoad:false,securityLevel:"strict",theme:"dark"});mermaid.run({querySelector:".mermaid"});});<\/script>`);
+}
+
 function addLivePreviewSupport(source, hasBackground) {
   let document = injectHeadContent(source, `${KATEX_HEAD}<style>${hasBackground ? "" : DEFAULT_DARK_STYLE}</style>`);
   if (/<\/body>/i.test(document)) {
@@ -120,6 +142,10 @@ export function buildCodePreviewDocument(source, language) {
   if (["html", "htm", "svg", "xml"].includes(normalized)) {
     return addLivePreviewSupport(htmlDocument(code), hasPageBackground(code));
   }
+  if (normalized === "mermaid") {
+    const diagram = `<main><pre class="mermaid">${escapeHtml(code)}</pre></main>`;
+    return mermaidRuntime(addLivePreviewSupport(htmlDocument(diagram), false));
+  }
   if (normalized === "css") {
     return addLivePreviewSupport(htmlDocument(`<style>body{font:16px system-ui,sans-serif;padding:24px;background:#f4f6f8;color:#18202b}.preview-sample{max-width:640px;margin:24px auto;padding:24px;border-radius:18px;background:white;box-shadow:0 10px 30px #17203318}</style><main class="preview-sample"><h1>Pratinjau CSS</h1><p>Contoh konten untuk melihat gaya yang diterapkan.</p><button type="button">Contoh tombol</button></main><style>${styleSafe(code)}</style>`), true);
   }
@@ -152,10 +178,11 @@ export function buildLiveArtifactDocument(blocks) {
   }
 
   const htmlBlock = normalized.find((block) => ["html", "htm", "svg", "xml"].includes(block.lang));
+  const mermaidBlocks = normalized.filter((block) => block.lang === "mermaid");
   const hasBackground = normalized.some((block) => hasPageBackground(block.source));
   let document = htmlBlock
     ? htmlDocument(htmlBlock.source)
-    : htmlDocument("<main id=\"app\"><h1>Pratinjau Artifact</h1></main>");
+    : htmlDocument(`<main id="app"><h1>Pratinjau Artifact</h1>${mermaidBlocks.map((block) => `<pre class="mermaid">${escapeHtml(block.source)}</pre>`).join("")}</main>`);
   const styles = normalized.filter((block) => ["css", "scss"].includes(block.lang))
     .map((block) => styleSafe(block.source)).join("\n");
   const scripts = normalized.filter((block) => ["js", "javascript", "mjs"].includes(block.lang))
@@ -168,6 +195,10 @@ export function buildLiveArtifactDocument(blocks) {
       ? document.replace(/<\/body>/i, `${script}</body>`)
       : document.replace(/<\/html>/i, `${script}</html>`);
   }
+  if (mermaidBlocks.length && htmlBlock) {
+    document = appendToBody(document, mermaidBlocks.map((block) => `<pre class="mermaid">${escapeHtml(block.source)}</pre>`).join(""));
+  }
   document = addLivePreviewSupport(document, true);
+  if (mermaidBlocks.length) document = mermaidRuntime(document);
   return document;
 }

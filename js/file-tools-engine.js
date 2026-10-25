@@ -8,7 +8,6 @@ const LIBRARIES = {
   xlsx: "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm",
   docx: "https://cdn.jsdelivr.net/npm/docx@9.5.1/+esm",
   jsZip: "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
-  pptxGen: "https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/+esm",
 };
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const MAX_FILES = 30;
@@ -242,7 +241,11 @@ export class MyAIFileToolsEngine {
       }
       checkAbort();
       report(100, "Selesai");
-      return { ...result, sourceSize: result.sourceSize ?? totalSize };
+      return {
+        ...result,
+        sourceSize: result.sourceSize ?? totalSize,
+        outputSize: result.outputSize ?? result.file?.size ?? 0,
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Terjadi kesalahan saat memproses file.";
       throw new Error(message);
@@ -436,53 +439,29 @@ export class MyAIFileToolsEngine {
     if (!sheets.length) throw new Error("Workbook tidak berisi data untuk dibuat menjadi presentasi.");
     const pageCount = sheets.reduce((sum, sheet) => sum + Math.max(1, Math.ceil(Math.max(0, sheet.rows.length - 1) / 10)), 0);
     if (pageCount > 50) throw new Error("Konversi dibatasi hingga 50 slide. Pilih lembar atau baris yang lebih sedikit.");
-    const imported = await this.loadLibrary("pptxgenjs", LIBRARIES.pptxGen);
-    const PptxGenJS = imported.default || imported;
-    const pptx = new PptxGenJS();
-    pptx.layout = "LAYOUT_WIDE";
-    pptx.author = "MyAI";
-    pptx.subject = "Presentasi dibuat dari workbook Excel";
-    pptx.title = safeBaseName(file.name);
-    pptx.theme = {
-      headFontFace: "Aptos Display",
-      bodyFontFace: "Aptos",
-      lang: "id-ID",
-    };
-    const colors = { background: "10151D", surface: "1B2532", accent: "62D7C8", text: "F3F6FA", muted: "A9B7C8" };
-    let slideNumber = 0;
+    const slides = [];
     for (const sheet of sheets) {
       const [header, ...data] = sheet.rows;
       const pages = Math.max(1, Math.ceil(data.length / 10));
       for (let pageIndex = 0; pageIndex < pages; pageIndex++) {
-        const slide = pptx.addSlide();
-        slide.background = { color: colors.background };
-        slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.16, h: 7.5, line: { color: colors.accent, transparency: 100 }, fill: { color: colors.accent } });
-        slide.addText(sheet.name, { x: 0.62, y: 0.42, w: 10.8, h: 0.5, fontFace: "Aptos Display", fontSize: 27, bold: true, color: colors.text, margin: 0 });
-        if (pages > 1) slide.addText(`Bagian ${pageIndex + 1} dari ${pages}`, { x: 10.7, y: 0.55, w: 1.9, h: 0.22, fontSize: 10, color: colors.muted, align: "right", margin: 0 });
-        slide.addShape(pptx.ShapeType.line, { x: 0.62, y: 1.12, w: 12.05, h: 0, line: { color: colors.accent, transparency: 35, width: 1.2 } });
         const pageRows = data.slice(pageIndex * 10, (pageIndex + 1) * 10);
-        const tableRows = [
-          header.map((cell) => ({ text: cell, options: { bold: true, color: colors.background, fill: colors.accent, breakLine: false } })),
-          ...pageRows.map((row, rowIndex) => Array.from({ length: header.length }, (_, column) => ({
-            text: row[column] || "",
-            options: { color: colors.text, fill: rowIndex % 2 ? colors.surface : "222F3D", breakLine: false },
-          }))),
-        ];
-        slide.addTable(tableRows, {
-          x: 0.62, y: 1.42, w: 12.05, h: 5.42,
-          border: { type: "solid", color: "344456", pt: 0.6 },
-          fontFace: "Aptos", fontSize: header.length > 5 ? 10 : 12,
-          color: colors.text, margin: 0.08, rowH: 0.43,
-          autoFit: false, valign: "mid",
-          colW: Array.from({ length: header.length }, () => 12.05 / header.length),
+        const content = pageRows.map((row) => header
+          .map((heading, column) => `${heading}: ${row[column] || ""}`)
+          .join(" | ")
+          .slice(0, 2000));
+        slides.push({
+          title: pages > 1 ? `${sheet.name} · Bagian ${pageIndex + 1} dari ${pages}` : sheet.name,
+          content: content.length ? content : header.slice(0, 30),
         });
-        slide.addText(`MYAI  ·  ${++slideNumber} / ${pageCount}`, { x: 10.7, y: 7.08, w: 1.9, h: 0.18, fontSize: 9, color: colors.muted, align: "right", margin: 0 });
-        onProgress(20 + (slideNumber / pageCount) * 60, `Menyusun slide ${slideNumber} dari ${pageCount}`);
+        onProgress(20 + (slides.length / pageCount) * 60, `Menyusun outline slide ${slides.length} dari ${pageCount}`);
       }
     }
-    onProgress(88, "Mengekspor presentasi PowerPoint");
-    const blob = await pptx.write({ outputType: "blob" });
-    return outputFile(blob, `${safeBaseName(file.name)}.pptx`, file.size);
+    onProgress(88, "Outline siap dikirim ke Canva Connect");
+    return {
+      presentationOutline: { title: safeBaseName(file.name), slides },
+      sourceSize: file.size,
+      outputSize: 0,
+    };
   }
 
   async convertImagesToPdf(files, onProgress) {

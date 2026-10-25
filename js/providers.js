@@ -8,6 +8,7 @@ import {
 const WORKER_MODEL_TIMEOUT_MS = 45000;
 const CHAT_STREAM_IDLE_TIMEOUT_MS = 45000;
 const SETTINGS_KEY = "myai_settings";
+const GUEST_DEVICE_ID_STORAGE_KEY = "myai_guest_device_id_v1";
 const LEGACY_DEFAULT_SYSTEM_PROMPT = "Kamu adalah asisten AI yang ramah, cerdas, dan membantu. Berkomunikasilah secara natural, hangat, dan relevan seperti teman bicara yang baik; pahami konteks percakapan sebelumnya dan tanyakan klarifikasi hanya bila memang diperlukan. Jawab dalam bahasa yang dipakai pengguna. Gunakan Markdown untuk format, dan tulis rumus matematika dengan LaTeX ($...$ atau $$...$$).";
 export const DEFAULT_SETTINGS = {
   showPaid: false,
@@ -67,9 +68,131 @@ export function saveSettings(s) {
   }));
 }
 
+export function isRateLimitOrQuotaError(error) {
+  const message = String(error?.message || error || "");
+  const status = Number(error?.status || message.match(/\b(?:HTTP\s*)?(402|429)\b/i)?.[1] || 0);
+  return status === 402 || status === 429
+    || /\brate[\s-]?limit\b|\bquota\b|\bkuota\b|batas (?:penggunaan|pemakaian)/i.test(message);
+}
+
+export function normalizeChatMessages(messages) {
+  if (!Array.isArray(messages)) throw new TypeError("Riwayat chat harus berupa daftar pesan.");
+  const systemParts = [];
+  const conversation = [];
+  for (const message of messages) {
+    if (!message || !["system", "user", "assistant"].includes(message.role) || typeof message.content !== "string") {
+      throw new TypeError("Format riwayat chat tidak valid.");
+    }
+    if (message.role === "system") {
+      const content = message.content.trim();
+      if (content && !systemParts.includes(content)) systemParts.push(content);
+    } else {
+      conversation.push({ ...message });
+    }
+  }
+  let latestUserIndex = -1;
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    if (conversation[index].role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  const activeConversation = latestUserIndex >= 0
+    ? conversation.slice(0, latestUserIndex + 1)
+    : conversation;
+  return [
+    ...(systemParts.length ? [{ role: "system", content: systemParts.join("\n\n") }] : []),
+    ...activeConversation,
+  ];
+}
+
 const GUEST_CHAR_BUDGET = 5800;
 const SERVER_MODELS_CACHE_MS = 5 * 60 * 1000;
-const MODEL_STORAGE_PREFIX = "myai_initial_model_catalog_v1";
+const MODEL_STORAGE_PREFIX = "myai_initial_model_catalog_v3";
+let guestTurnstileScriptPromise = null;
+
+function getGuestDeviceId() {
+  let deviceId;
+  try {
+    deviceId = localStorage.getItem(GUEST_DEVICE_ID_STORAGE_KEY);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId || "")) {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      deviceId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+      localStorage.setItem(GUEST_DEVICE_ID_STORAGE_KEY, deviceId);
+    }
+  } catch {
+    throw new Error("Penyimpanan ID perangkat guest tidak tersedia. Aktifkan localStorage lalu muat ulang halaman.");
+  }
+  return deviceId;
+}
+
+async function loadGuestTurnstile() {
+  if (globalThis.turnstile) return globalThis.turnstile;
+  if (!guestTurnstileScriptPromise) {
+    guestTurnstileScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+      script.defer = true;
+      script.onload = () => globalThis.turnstile
+        ? resolve(globalThis.turnstile)
+        : reject(new Error("Skrip verifikasi AI guest tidak dapat dimuat."));
+      script.onerror = () => reject(new Error("Skrip verifikasi AI guest tidak dapat dijangkau."));
+      document.head.append(script);
+    }).catch((error) => {
+      guestTurnstileScriptPromise = null;
+      throw error;
+    });
+  }
+  return guestTurnstileScriptPromise;
+}
+
+async function guestRequestHeaders(apiBase, { json = true } = {}) {
+  const deviceId = getGuestDeviceId();
+  const configResponse = await fetch(`${apiBase}/guest/config`, { cache: "no-store" });
+  if (!configResponse.ok) throw new Error(await errorText(configResponse));
+  const config = await configResponse.json();
+  if (typeof config.turnstileSiteKey !== "string" || !config.turnstileSiteKey) {
+    throw new Error("Konfigurasi verifikasi AI guest tidak valid. Hubungi admin.");
+  }
+  const turnstile = await loadGuestTurnstile();
+  const container = document.createElement("div");
+  container.style.position = "fixed";
+  container.style.right = "12px";
+  container.style.bottom = "12px";
+  container.style.zIndex = "10000";
+  document.body.append(container);
+  let widgetId;
+  let timer;
+  try {
+    const token = await new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Verifikasi AI guest melewati batas waktu. Silakan coba lagi.")), 120000);
+      widgetId = turnstile.render(container, {
+        sitekey: config.turnstileSiteKey,
+        size: "invisible",
+        execution: "execute",
+        appearance: "interaction-only",
+        callback: resolve,
+        "error-callback": () => reject(new Error("Verifikasi AI guest gagal dimuat. Silakan coba lagi.")),
+        "expired-callback": () => reject(new Error("Verifikasi AI guest kedaluwarsa. Silakan coba lagi.")),
+        "timeout-callback": () => reject(new Error("Verifikasi AI guest melewati batas waktu. Silakan coba lagi.")),
+      });
+      turnstile.execute(widgetId);
+    });
+    return {
+      ...(json ? { "Content-Type": "application/json" } : {}),
+      "X-Turnstile-Token": token,
+      "X-Guest-Device-Id": deviceId,
+    };
+  } finally {
+    clearTimeout(timer);
+    if (widgetId !== undefined) turnstile.remove(widgetId);
+    container.remove();
+  }
+}
 let guestModelsPromise = null;
 let serverModelsCache = null;
 
@@ -209,7 +332,19 @@ async function* readSSE(res, requestGuard) {
         tokens: Number(event.tokens || 0),
         completionTokens: Number(event.completion_tokens || 0),
         durationMs: Number(event.duration_ms || 0),
+        ...(Number.isFinite(Number(event.tokens_per_second)) ? { tokensPerSecond: Number(event.tokens_per_second) } : {}),
         model: typeof event.model === "string" ? event.model : "",
+      };
+    }
+    if (event.type === "route" && typeof event.provider === "string"
+      && typeof event.model === "string") {
+      event.myaiRoute = {
+        provider: event.provider,
+        model: event.model,
+        modelName: typeof event.modelName === "string" ? event.modelName : event.model,
+        fromProvider: typeof event.fromProvider === "string" ? event.fromProvider : "",
+        fromModel: typeof event.fromModel === "string" ? event.fromModel : "",
+        message: typeof event.message === "string" ? event.message : "",
       };
     }
     if (event.type === "fallback") {
@@ -221,7 +356,7 @@ async function* readSSE(res, requestGuard) {
       };
     }
     if (event.type === "provider-health" && typeof event.provider === "string"
-      && ["HEALTHY", "DEGRADED", "EXHAUSTED", "ERROR", "UNREACHABLE"].includes(event.status)) {
+      && ["CHECKING", "HEALTHY", "DEGRADED", "EXHAUSTED", "ERROR", "UNREACHABLE"].includes(event.status)) {
       event.myaiProviderHealth = {
         provider: event.provider,
         model: typeof event.model === "string" ? event.model : "",
@@ -359,7 +494,7 @@ export async function listGuestModels({ force = false } = {}) {
     try {
       response = await fetch(`${apiBase}/guest/models`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await guestRequestHeaders(apiBase),
         body: "{}",
         signal: controller.signal,
       });
@@ -382,6 +517,9 @@ export async function listGuestModels({ force = false } = {}) {
     return await guestModelsPromise;
   } catch (error) {
     guestModelsPromise = null;
+    if (/TURNSTILE_SITE_KEY|TURNSTILE_SECRET_KEY|Konfigurasi verifikasi AI guest/i.test(error?.message || "")) {
+      throw error;
+    }
     if (storedCatalog) {
       console.warn("MyAI guest model catalog refresh failed; using the saved catalog.", error);
       return { groups: storedCatalog.groups, remaining: null, errors: [error.message || String(error)] };
@@ -406,7 +544,7 @@ async function* guestStream(model, messages, opts, signal) {
   const response = await fetch(`${apiBase}/guest/chat`, {
     method: "POST",
     signal,
-    headers: { "Content-Type": "application/json" },
+  headers: await guestRequestHeaders(apiBase),
     body,
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -414,13 +552,14 @@ async function* guestStream(model, messages, opts, signal) {
   if (Number.isInteger(remaining) && remaining >= 0 && remaining <= 2) {
     yield {
       guestRemaining: remaining,
-      ...(remaining === 0 ? { notice: "Jatah dua jawaban AI gratis tanpa login sudah digunakan. Masuk dengan Google untuk melanjutkan." } : {}),
+      ...(remaining === 0 ? { notice: "Jatah dua penggunaan AI gratis tanpa login sudah digunakan. Masuk dengan Google untuk melanjutkan." } : {}),
     };
   }
   for await (const chunk of readSSE(response, opts.requestGuard)) {
     if (chunk.error) throw new Error(chunk.error.message || "AI guest gagal menjawab.");
     if (chunk.myaiUsage) yield { usage: chunk.myaiUsage };
     if (chunk.myaiMetrics) yield { metrics: chunk.myaiMetrics };
+    if (chunk.myaiRoute) yield { route: chunk.myaiRoute };
     if (chunk.myaiFallback) yield { fallback: chunk.myaiFallback };
     if (chunk.myaiProviderHealth) yield { providerHealth: chunk.myaiProviderHealth };
     const annotations = chunk.choices?.[0]?.delta?.annotations || chunk.choices?.[0]?.message?.annotations || [];
@@ -517,7 +656,9 @@ async function* pollinationsStream(model, messages, opts, signal) {
   const basePrompt = imagePlan.prompt.replace(/[. ]+$/, "");
   const prompt = imagePlan.negative ? `${basePrompt}. Avoid: ${imagePlan.negative}.` : basePrompt;
   const dimensions = { "16:9": [1280, 720], "9:16": [768, 1344], "1:1": [1024, 1024] };
-  const [width, height] = dimensions[imagePlan.aspect] || pollinationsSize(userPrompt);
+  const [width, height] = opts?.imageFallbackResolution === "768x768"
+    ? [768, 768]
+    : dimensions[imagePlan.aspect] || pollinationsSize(userPrompt);
   const seed = Math.floor(Math.random() * 1_000_000);
   const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${width}&height=${height}&model=${encodeURIComponent(model)}&nologo=true&enhance=false&seed=${seed}`;
   await waitForPollinationsImage(imageUrl, signal);
@@ -578,7 +719,7 @@ export async function enhanceImagePrompt(prompt, {
     return {
       ...plan,
       enhanced: result.enhanced === true && plan.prompt !== fallback.prompt,
-      enhancer: result.enhancer === "groq" ? "groq" : "local",
+      enhancer: ["groq", "nvidia"].includes(result.enhancer) ? result.enhancer : "local",
       enhancerModel: typeof result.enhancerModel === "string" ? result.enhancerModel : "deterministic-fallback",
       ...(!result.enhanced ? {
         reason: typeof result.reason === "string"
@@ -610,9 +751,12 @@ async function transcribeThroughServer(apiBase, form, authToken, signal) {
   const abortRequest = () => controller.abort();
   signal?.addEventListener("abort", abortRequest, { once: true });
   try {
+    const headers = authToken
+      ? { Authorization: `Bearer ${authToken}` }
+      : await guestRequestHeaders(apiBase, { json: false });
     const response = await fetch(`${apiBase}/${guest ? "guest/" : ""}transcribe`, {
       method: "POST",
-      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      headers,
       body: form,
       signal: controller.signal,
     });
@@ -638,26 +782,24 @@ async function transcribeThroughServer(apiBase, form, authToken, signal) {
 }
 
 export async function* streamChat(provider, model, messages, opts, signal) {
-  if (["pollinations", "server-gemini-image"].includes(provider) && opts?.imageGeneration !== true) {
+  if (provider === "pollinations" && opts?.imageGeneration !== true) {
     throw new Error("Model pembuatan gambar tidak dapat digunakan untuk chat teks. Pilih model chat atau aktifkan Mode Gambar.");
   }
-  if (provider === "server-gemini-image") {
-    throw new Error("Model Gemini Image harus dipanggil melalui endpoint khusus gambar.");
-  }
+  const normalizedMessages = normalizeChatMessages(messages);
   const requestGuard = createRequestGuard(signal);
   const guardedOptions = { ...opts, requestGuard };
   try {
     let stream;
     if (provider.startsWith("gateway-")) {
-      stream = gatewayStream(provider.slice("gateway-".length), model, messages, guardedOptions, requestGuard.signal);
+      stream = gatewayStream(provider.slice("gateway-".length), model, normalizedMessages, guardedOptions, requestGuard.signal);
     } else if (provider === "pollinations") {
-      stream = pollinationsStream(model, messages, guardedOptions, requestGuard.signal);
+      stream = pollinationsStream(model, normalizedMessages, guardedOptions, requestGuard.signal);
     } else if (provider === "guest") {
-      stream = guestStream(model, messages, guardedOptions, requestGuard.signal);
+      stream = guestStream(model, normalizedMessages, guardedOptions, requestGuard.signal);
     } else if (provider.startsWith("manual-")) {
       throw new Error("Chat teks kini harus memakai model Cloudflare Worker. Pilih model server dari katalog AI.");
     } else {
-      stream = serverStream(provider, model, messages, guardedOptions, requestGuard.signal);
+      stream = serverStream(provider, model, normalizedMessages, guardedOptions, requestGuard.signal);
     }
     for await (const chunk of stream) {
       requestGuard.touch();
@@ -683,7 +825,9 @@ async function* gatewayStream(provider, model, messages, opts, signal) {
     temperature: opts.temperature,
     webSearch: opts.webSearch === true,
     researchMode: opts.researchMode === true,
+    promptHelper: opts.promptHelper === true && provider === "groq",
     customInstructions: opts.customInstructions,
+    allowFallback: true,
   });
   if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) {
     throw new Error("Permintaan AI gateway maksimal 4 MiB. Hapus beberapa lampiran atau mulai chat baru.");
@@ -711,6 +855,7 @@ async function* gatewayStream(provider, model, messages, opts, signal) {
     if (result.error) throw new Error(result.error.message || "Error dari AI gateway.");
     if (result.myaiUsage) yield { usage: result.myaiUsage };
     if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
+    if (result.myaiRoute) yield { route: result.myaiRoute };
     if (result.myaiFallback) yield { fallback: result.myaiFallback };
     if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };
     const annotations = result.choices?.[0]?.delta?.annotations || [];
@@ -794,6 +939,7 @@ async function* serverStream(provider, model, messages, opts, signal) {
     for await (const result of readSSE(response, opts.requestGuard)) {
       if (result.myaiUsage) yield { usage: result.myaiUsage };
       if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
+      if (result.myaiRoute) yield { route: result.myaiRoute };
       if (result.myaiFallback) yield { fallback: result.myaiFallback };
       if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };
       for (const part of result.candidates?.[0]?.content?.parts || []) {
@@ -815,6 +961,7 @@ async function* serverStream(provider, model, messages, opts, signal) {
     if (result.error) throw new Error(result.error.message || "Error dari server provider.");
     if (result.myaiUsage) yield { usage: result.myaiUsage };
     if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
+    if (result.myaiRoute) yield { route: result.myaiRoute };
     if (result.myaiFallback) yield { fallback: result.myaiFallback };
     if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };
     const annotations = result.choices?.[0]?.delta?.annotations || result.choices?.[0]?.message?.annotations || [];
