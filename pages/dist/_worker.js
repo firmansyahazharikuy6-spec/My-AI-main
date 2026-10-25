@@ -21,10 +21,27 @@ const API_ROUTES = new Map([
   ["/api/monid/get", "/monid/get"],
   ["/api/explorium/search", "/explorium/search"],
 ]);
+const ALLOWED_ORIGINS = new Set([
+  "https://myai-v3-firmansyah.pages.dev",
+  "https://b1259143.myai-v3-firmansyah.pages.dev",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "capacitor://localhost",
+]);
+function buildCorsHeaders(request) {
+  const origin = request.headers.get("Origin");
+  const allowOrigin = origin && ALLOWED_ORIGINS.has(origin) ? origin : "";
+  return {
+    ...(allowOrigin ? { "Access-Control-Allow-Origin": allowOrigin } : {}),
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+    "Access-Control-Max-Age": "86400",
+    "Vary": "Origin",
+  };
+}
 const ERROR_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Cache-Control": "no-store",
   "Content-Type": "application/json; charset=utf-8",
 };
@@ -41,7 +58,9 @@ export default {
     if (!upstreamPath) {
       const response = await env.ASSETS.fetch(request);
       const headers = new Headers(response.headers);
-      for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
+      for (const [name, value] of Object.entries({ ...buildCorsHeaders(request), ...SECURITY_HEADERS })) {
+        headers.set(name, value);
+      }
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
@@ -49,7 +68,7 @@ export default {
       });
     }
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: { ...ERROR_HEADERS, ...SECURITY_HEADERS } });
+      return new Response(null, { status: 204, headers: { ...buildCorsHeaders(request), ...ERROR_HEADERS, ...SECURITY_HEADERS } });
     }
 
     const upstreamUrl = new URL(`${upstreamPath}${url.search}`, WORKER_ORIGIN);
@@ -60,7 +79,9 @@ export default {
     try {
       const response = await fetch(new Request(upstreamUrl, request), { signal });
       const headers = new Headers(response.headers);
-      for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
+      for (const [name, value] of Object.entries({ ...buildCorsHeaders(request), ...SECURITY_HEADERS })) {
+        headers.set(name, value);
+      }
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
@@ -77,7 +98,7 @@ export default {
         },
       }), {
         status: timedOut ? 504 : 502,
-        headers: { ...ERROR_HEADERS, ...SECURITY_HEADERS },
+        headers: { ...buildCorsHeaders(request), ...ERROR_HEADERS, ...SECURITY_HEADERS },
       });
     }
   },
