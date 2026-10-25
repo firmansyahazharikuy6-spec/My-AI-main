@@ -1,0 +1,826 @@
+import { AI_API_URL } from "./config.js?v=20261020-v5.29";
+import {
+  buildFallbackImagePromptPlan,
+  cleanImageGenerationPrompt,
+  validateImagePromptPlan,
+} from "./image-prompts.js";
+
+const WORKER_MODEL_TIMEOUT_MS = 45000;
+const CHAT_STREAM_IDLE_TIMEOUT_MS = 45000;
+const SETTINGS_KEY = "myai_settings";
+const LEGACY_DEFAULT_SYSTEM_PROMPT = "Kamu adalah asisten AI yang ramah, cerdas, dan membantu. Berkomunikasilah secara natural, hangat, dan relevan seperti teman bicara yang baik; pahami konteks percakapan sebelumnya dan tanyakan klarifikasi hanya bila memang diperlukan. Jawab dalam bahasa yang dipakai pengguna. Gunakan Markdown untuk format, dan tulis rumus matematika dengan LaTeX ($...$ atau $$...$$).";
+export const DEFAULT_SETTINGS = {
+  showPaid: false,
+  systemPrompt: "Jawablah secara ramah, jelas, dan natural. Utamakan jawaban yang sesuai kebutuhan pengguna.",
+  temperature: 0.7,
+  about: "",
+  persona: "balanced",
+  responseLength: "balanced",
+  enterToSend: true,
+  autoSpeak: false,
+  showPerformanceAnalytics: true,
+};
+
+export function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+    if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+      if (Object.prototype.hasOwnProperty.call(saved, "apiKeys")) {
+        const cleaned = { ...saved };
+        delete cleaned.apiKeys;
+        try {
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify(cleaned));
+        } catch (error) {
+          console.warn("Legacy browser API keys could not be removed from local storage.", error);
+        }
+      }
+      return {
+        ...DEFAULT_SETTINGS,
+        showPaid: saved.showPaid === true,
+        systemPrompt: typeof saved.systemPrompt === "string" && saved.systemPrompt !== LEGACY_DEFAULT_SYSTEM_PROMPT
+          ? saved.systemPrompt
+          : DEFAULT_SETTINGS.systemPrompt,
+        temperature: Number.isFinite(Number(saved.temperature)) ? Math.min(1.5, Math.max(0, Number(saved.temperature))) : DEFAULT_SETTINGS.temperature,
+        about: typeof saved.about === "string" ? saved.about.slice(0, 1500) : "",
+        persona: ["balanced", "general", "tutor", "professional", "coding", "creative", "researcher"].includes(saved.persona) ? saved.persona : DEFAULT_SETTINGS.persona,
+        responseLength: ["concise", "balanced", "detailed"].includes(saved.responseLength) ? saved.responseLength : DEFAULT_SETTINGS.responseLength,
+        enterToSend: saved.enterToSend !== false,
+        autoSpeak: saved.autoSpeak === true,
+        showPerformanceAnalytics: saved.showPerformanceAnalytics !== false,
+      };
+    }
+  } catch {}
+  return { ...DEFAULT_SETTINGS };
+}
+
+export function saveSettings(s) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+    showPaid: s.showPaid === true,
+    systemPrompt: s.systemPrompt,
+    temperature: s.temperature,
+    about: s.about || "",
+    persona: ["balanced", "general", "tutor", "professional", "coding", "creative", "researcher"].includes(s.persona) ? s.persona : DEFAULT_SETTINGS.persona,
+    responseLength: ["concise", "balanced", "detailed"].includes(s.responseLength) ? s.responseLength : DEFAULT_SETTINGS.responseLength,
+    enterToSend: s.enterToSend !== false,
+    autoSpeak: s.autoSpeak === true,
+    showPerformanceAnalytics: s.showPerformanceAnalytics !== false,
+  }));
+}
+
+const GUEST_CHAR_BUDGET = 5800;
+const SERVER_MODELS_CACHE_MS = 5 * 60 * 1000;
+const MODEL_STORAGE_PREFIX = "myai_initial_model_catalog_v1";
+let guestModelsPromise = null;
+let serverModelsCache = null;
+
+function readStoredCatalog(key) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "null");
+    if (value?.version === 1 && Array.isArray(value.groups)) return value;
+  } catch (error) {
+    console.warn("MyAI model catalog cache could not be read.", error);
+  }
+  return null;
+}
+
+function storeCatalog(key, catalog) {
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      version: 1,
+      cachedAt: Date.now(),
+      groups: catalog.groups,
+      ...(Array.isArray(catalog.providers) ? { providers: catalog.providers } : {}),
+    }));
+  } catch (error) {
+    console.warn("MyAI model catalog could not be cached locally.", error);
+  }
+}
+
+export function invalidateGuestModels() {
+  guestModelsPromise = null;
+}
+
+export function invalidateServerModels() {
+  serverModelsCache = null;
+}
+
+// Worker guest menolak >8 pesan, >6000 karakter total, atau >1 gambar.
+function fitGuestMessages(messages) {
+  const chatOnly = messages.filter((message) => message.role === "user" || message.role === "assistant");
+  const fitted = [];
+  let used = 0;
+  let imageUsed = false;
+  for (let index = chatOnly.length - 1; index >= 0 && fitted.length < 8; index -= 1) {
+    const message = chatOnly[index];
+    const remaining = GUEST_CHAR_BUDGET - used;
+    if (remaining < 200 && fitted.length) break;
+    let content = String(message.content || "");
+    if (content.length > remaining) {
+      content = message.role === "user" && !fitted.length
+        ? content.slice(0, Math.max(0, remaining - 60)) + "\n\n[...dipotong karena batas AI guest]"
+        : "";
+    }
+    if (!content) break;
+    const next = { role: message.role, content };
+    if (!imageUsed && message.images?.length) {
+      next.images = [message.images[0]];
+      imageUsed = true;
+    }
+    used += content.length;
+    fitted.unshift(next);
+  }
+  while (fitted.length && fitted[0].role !== "user") fitted.shift();
+  return fitted;
+}
+
+async function errorText(res) {
+  const raw = await res.text();
+  try {
+    const j = JSON.parse(raw);
+    const message = typeof j.error === "string" ? j.error : j.error?.message;
+    const detail = message || j.message || raw;
+    return `${res.status}${j.code ? ` ${j.code}` : ""}: ${detail}`;
+  } catch {
+    const eventLine = raw.split(/\r?\n/).find((line) => line.startsWith("data:"));
+    if (eventLine) {
+      try {
+        const event = JSON.parse(eventLine.slice(5).trim());
+        const message = typeof event.error === "string" ? event.error : event.error?.message;
+        if (message) return `${res.status}: ${message}`;
+      } catch {}
+    }
+    return `${res.status}: ${raw.slice(0, 300)}`;
+  }
+}
+
+function createRequestGuard(parentSignal, timeoutMs = CHAT_STREAM_IDLE_TIMEOUT_MS) {
+  const controller = new AbortController();
+  let timeout;
+  let timedOut = false;
+  const timeoutRequest = () => {
+    timedOut = true;
+    controller.abort(new DOMException("AI stream tidak menerima data sebelum batas waktu.", "TimeoutError"));
+  };
+  const armTimeout = () => {
+    clearTimeout(timeout);
+    timeout = setTimeout(timeoutRequest, timeoutMs);
+  };
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  armTimeout();
+  return {
+    signal: controller.signal,
+    touch: armTimeout,
+    get timedOut() { return timedOut; },
+    cleanup() {
+      clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+async function* readSSE(res, requestGuard) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let complete = false;
+  const parseLine = (line) => {
+    if (!line.startsWith("data:")) return null;
+    const data = line.slice(5).trim();
+    if (data === "[DONE]") return { done: true };
+    let event;
+    try {
+      event = JSON.parse(data);
+    } catch {
+      return null;
+    }
+    if (event.error) {
+      throw new Error(typeof event.error === "string"
+        ? event.error
+        : event.error.message || "Error dari server AI.");
+    }
+    const usage = event.type === "usage" && event.tokens
+      ? event.tokens
+      : event.usage || event.usageMetadata;
+    if (usage) event.myaiUsage = normalizeUsage(usage);
+    if (event.type === "metrics") {
+      event.myaiMetrics = {
+        tokens: Number(event.tokens || 0),
+        completionTokens: Number(event.completion_tokens || 0),
+        durationMs: Number(event.duration_ms || 0),
+        model: typeof event.model === "string" ? event.model : "",
+      };
+    }
+    if (event.type === "fallback") {
+      event.myaiFallback = {
+        provider: typeof event.provider === "string" ? event.provider : "",
+        model: typeof event.model === "string" ? event.model : "",
+        modelName: typeof event.modelName === "string" ? event.modelName : "",
+        message: typeof event.message === "string" ? event.message : "",
+      };
+    }
+    if (event.type === "provider-health" && typeof event.provider === "string"
+      && ["HEALTHY", "DEGRADED", "EXHAUSTED", "ERROR", "UNREACHABLE"].includes(event.status)) {
+      event.myaiProviderHealth = {
+        provider: event.provider,
+        model: typeof event.model === "string" ? event.model : "",
+        status: event.status,
+        detail: typeof event.detail === "string" ? event.detail : "",
+        latencyMs: Number.isFinite(Number(event.latencyMs)) ? Number(event.latencyMs) : undefined,
+      };
+    }
+    return event;
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      requestGuard?.touch();
+      if (done) {
+        buf += decoder.decode();
+        complete = true;
+        break;
+      }
+      buf += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        const event = parseLine(line);
+        if (event?.done) {
+          complete = true;
+          return;
+        }
+        if (event) yield event;
+      }
+    }
+    const event = parseLine(buf.trim());
+    if (event && !event.done) yield event;
+  } finally {
+    try {
+      if (!complete) {
+        try {
+          await reader.cancel();
+        } catch {}
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+}
+
+export async function listServerModels(authToken, { includeCatalog = false, force = false, cacheKey = "" } = {}) {
+  if (!AI_API_URL) throw new Error("URL API Cloudflare Pages belum diatur di js/config.js.");
+  if (!authToken) throw new Error("Masuk dengan akun untuk memuat API AI server.");
+  if (!force && serverModelsCache?.authToken === authToken && Date.now() < serverModelsCache.expiresAt) {
+    return serverModelsCache.promise;
+  }
+  const storageKey = cacheKey
+    ? `${MODEL_STORAGE_PREFIX}_user_${encodeURIComponent(cacheKey)}_${includeCatalog ? "catalog" : "models"}`
+    : "";
+  const storedCatalog = storageKey ? readStoredCatalog(storageKey) : null;
+  if (!force && storageKey) {
+    if (storedCatalog) {
+      serverModelsCache = {
+        authToken,
+        expiresAt: Date.now() + SERVER_MODELS_CACHE_MS,
+        promise: Promise.resolve({ providers: storedCatalog.providers || [], groups: storedCatalog.groups, errors: [] }),
+      };
+      return serverModelsCache.promise;
+    }
+  }
+  const promise = (async () => {
+    const apiBase = AI_API_URL.replace(/\/+$/, "");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), WORKER_MODEL_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(`${apiBase}/models`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ includeCatalog }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error("Koneksi ke API Cloudflare Pages melewati batas 45 detik. Coba muat ulang dan periksa status Pages.");
+      }
+      if (error instanceof TypeError) {
+        throw new Error("API Cloudflare Pages tidak dapat dijangkau (DNS, koneksi, atau CORS). Periksa koneksi dan status website.");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) throw new Error(await errorText(response));
+    const result = await response.json();
+    if (!Array.isArray(result.providers) || !Array.isArray(result.groups) || !Array.isArray(result.errors)) {
+      throw new Error("Respons katalog dari Cloudflare Worker tidak valid.");
+    }
+    if (storageKey) storeCatalog(storageKey, result);
+    return result;
+  })();
+  serverModelsCache = {
+    authToken,
+    expiresAt: Date.now() + SERVER_MODELS_CACHE_MS,
+    promise,
+  };
+  try {
+    return await promise;
+  } catch (error) {
+    if (serverModelsCache?.promise === promise) serverModelsCache = null;
+    if (storedCatalog) {
+      console.warn("MyAI model catalog refresh failed; using the saved catalog.", error);
+      return { providers: storedCatalog.providers || [], groups: storedCatalog.groups, errors: [error.message || String(error)] };
+    }
+    throw error;
+  }
+}
+
+export async function listGuestModels({ force = false } = {}) {
+  const storageKey = `${MODEL_STORAGE_PREFIX}_guest`;
+  const storedCatalog = readStoredCatalog(storageKey);
+  if (force) guestModelsPromise = null;
+  if (!force) {
+    if (storedCatalog) {
+      guestModelsPromise = Promise.resolve({ groups: storedCatalog.groups, remaining: null, errors: [] });
+      return guestModelsPromise;
+    }
+  }
+  if (guestModelsPromise) return guestModelsPromise;
+  const apiBase = AI_API_URL.replace(/\/+$/, "");
+  guestModelsPromise = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), WORKER_MODEL_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(`${apiBase}/guest/models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") throw new Error("Katalog AI guest melewati batas waktu 45 detik.");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) throw new Error(await errorText(response));
+    const result = await response.json();
+    if (!Array.isArray(result.groups) || !Number.isInteger(result.remaining) || result.remaining < 0 || result.remaining > 2
+      || (result.errors !== undefined && !Array.isArray(result.errors))) {
+      throw new Error("Katalog AI guest tidak valid.");
+    }
+    storeCatalog(storageKey, result);
+    return { groups: result.groups, remaining: result.remaining, errors: result.errors || [] };
+  })();
+  try {
+    return await guestModelsPromise;
+  } catch (error) {
+    guestModelsPromise = null;
+    if (storedCatalog) {
+      console.warn("MyAI guest model catalog refresh failed; using the saved catalog.", error);
+      return { groups: storedCatalog.groups, remaining: null, errors: [error.message || String(error)] };
+    }
+    throw error;
+  }
+}
+
+async function* guestStream(model, messages, opts, signal) {
+  const apiBase = AI_API_URL.replace(/\/+$/, "");
+  const body = JSON.stringify({
+    model,
+    messages: fitGuestMessages(messages),
+    temperature: Math.min(0.7, opts.temperature),
+    webSearch: opts.webSearch === true,
+    researchMode: opts.researchMode === true,
+    customInstructions: opts.customInstructions,
+  });
+  if (new TextEncoder().encode(body).byteLength > 2 * 1024 * 1024) {
+    throw new Error("Prompt AI guest terlalu besar. Ringkas teks atau kurangi gambar.");
+  }
+  const response = await fetch(`${apiBase}/guest/chat`, {
+    method: "POST",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  const remaining = Number(response.headers.get("X-Guest-Remaining"));
+  if (Number.isInteger(remaining) && remaining >= 0 && remaining <= 2) {
+    yield {
+      guestRemaining: remaining,
+      ...(remaining === 0 ? { notice: "Jatah dua jawaban AI gratis tanpa login sudah digunakan. Masuk dengan Google untuk melanjutkan." } : {}),
+    };
+  }
+  for await (const chunk of readSSE(response, opts.requestGuard)) {
+    if (chunk.error) throw new Error(chunk.error.message || "AI guest gagal menjawab.");
+    if (chunk.myaiUsage) yield { usage: chunk.myaiUsage };
+    if (chunk.myaiMetrics) yield { metrics: chunk.myaiMetrics };
+    if (chunk.myaiFallback) yield { fallback: chunk.myaiFallback };
+    if (chunk.myaiProviderHealth) yield { providerHealth: chunk.myaiProviderHealth };
+    const annotations = chunk.choices?.[0]?.delta?.annotations || chunk.choices?.[0]?.message?.annotations || [];
+    for (const annotation of annotations) {
+      if (annotation.type === "url_citation" && annotation.url_citation?.url) {
+        yield { citation: { url: annotation.url_citation.url, title: annotation.url_citation.title } };
+      }
+    }
+    if (chunk.content) {
+      yield { content: chunk.content };
+      continue;
+    }
+    const geminiParts = chunk.candidates?.[0]?.content?.parts || [];
+    for (const source of chunk.candidates?.[0]?.groundingMetadata?.groundingChunks || []) {
+      if (source.web?.uri) yield { citation: { url: source.web.uri, title: source.web.title } };
+    }
+    if (geminiParts.length) {
+      for (const part of geminiParts) {
+        if (part.text) yield part.thought ? { reasoning: part.text } : { content: part.text };
+      }
+      continue;
+    }
+    const delta = chunk.choices?.[0]?.delta;
+    if (delta?.reasoning) yield { reasoning: delta.reasoning };
+    const content = delta?.content;
+    if (typeof content === "string") yield { content };
+    else if (Array.isArray(content)) {
+      const text = content.filter((part) => part.type === "text" && typeof part.text === "string")
+        .map((part) => part.text).join("");
+      if (text) yield { content: text };
+    }
+  }
+}
+
+function parsePollinationsMarkdownImage(markdownImage) {
+  const match = String(markdownImage || "").trim().match(/^!\[Generated Image\]\((https:\/\/[^\s)]+)\)$/);
+  if (!match) return null;
+  try {
+    const url = new URL(match[1]);
+    if (!["image.pollinations.ai", "gen.pollinations.ai"].includes(url.hostname)
+      || url.protocol !== "https:"
+      || url.username
+      || url.password) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+export function regeneratePollinationsUrl(source) {
+  const url = new URL(source);
+  if (url.protocol !== "https:" || url.hostname !== "image.pollinations.ai" || !url.pathname.startsWith("/prompt/")) {
+    throw new Error("Sumber gambar bukan URL Pollinations yang valid.");
+  }
+  url.searchParams.set("seed", String(Math.floor(Math.random() * 1_000_000)));
+  return url.href;
+}
+
+function pollinationsSize(prompt) {
+  if (/\b(landscape|lanskap|wide|lebar|banner|wallpaper desktop|16:9|pemandangan|pegunungan|panorama|mountains?)\b/i.test(prompt)) return [1280, 720];
+  if (/\b(portrait|potret|vertikal|vertical|poster|story|9:16|wallpaper hp)\b/i.test(prompt)) return [768, 1344];
+  return [1024, 1024];
+}
+
+async function waitForPollinationsImage(url, signal) {
+  if (typeof Image !== "function") return;
+  await new Promise((resolve, reject) => {
+    const image = new Image();
+    const timeout = setTimeout(() => finish(new Error("Pollinations belum mengirim gambar dalam 90 detik.")), 90000);
+    const finish = (error) => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      image.onload = null;
+      image.onerror = null;
+      error ? reject(error) : resolve();
+    };
+    const onAbort = () => finish(new DOMException("Aborted", "AbortError"));
+    image.onload = () => finish();
+    image.onerror = () => finish(new Error("Pollinations gagal membuat atau memuat gambar. Coba lagi atau pilih model lain."));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) return onAbort();
+    image.src = url;
+    if (image.complete && image.naturalWidth > 0) finish();
+  });
+}
+
+async function* pollinationsStream(model, messages, opts, signal) {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const userPrompt = cleanImageGenerationPrompt(
+    String([...messages].reverse().find((message) => message.role === "user")?.content || ""),
+  ).slice(0, 1200);
+  if (!userPrompt) throw new Error("Tulis deskripsi gambar terlebih dahulu.");
+  const imagePlan = validateImagePromptPlan(opts?.imagePromptPlan, userPrompt);
+  const basePrompt = imagePlan.prompt.replace(/[. ]+$/, "");
+  const prompt = imagePlan.negative ? `${basePrompt}. Avoid: ${imagePlan.negative}.` : basePrompt;
+  const dimensions = { "16:9": [1280, 720], "9:16": [768, 1344], "1:1": [1024, 1024] };
+  const [width, height] = dimensions[imagePlan.aspect] || pollinationsSize(userPrompt);
+  const seed = Math.floor(Math.random() * 1_000_000);
+  const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${width}&height=${height}&model=${encodeURIComponent(model)}&nologo=true&enhance=false&seed=${seed}`;
+  await waitForPollinationsImage(imageUrl, signal);
+  yield {
+    image: imageUrl,
+    imageMetadata: {
+      provider: "pollinations",
+      model,
+      modelLabel: model === "turbo" ? "Turbo (Pollinations)" : "Flux (Pollinations)",
+      prompt,
+      negative: imagePlan.negative,
+      style: imagePlan.style,
+      aspect: imagePlan.aspect,
+      assumptions: imagePlan.assumptions,
+      enhanced: opts?.imagePromptPlan?.enhanced === true,
+      ...(opts?.imageFallbackReason ? { fallbackReason: opts.imageFallbackReason } : {}),
+    },
+  };
+  yield { content: `Gambar dibuat dari prompt: *${userPrompt.replace(/[*_`]/g, "")}*` };
+}
+
+export async function enhanceImagePrompt(prompt, {
+  authToken = "",
+  signal,
+  autoEnhance = true,
+} = {}) {
+  const cleaned = cleanImageGenerationPrompt(prompt).slice(0, 1200);
+  const fallback = buildFallbackImagePromptPlan(cleaned);
+  if (!autoEnhance) {
+    return { ...fallback, enhanced: false, enhancer: "disabled", reason: "Penyempurnaan otomatis dimatikan." };
+  }
+  if (!AI_API_URL || !authToken) {
+    return { ...fallback, enhanced: false, enhancer: "local", reason: "Dipakai prompt lokal karena sesi enhancer tidak tersedia." };
+  }
+  try {
+    const response = await fetch(`${AI_API_URL.replace(/\/+$/, "")}/enhance-prompt`, {
+      method: "POST",
+      signal: signal && typeof AbortSignal.any === "function"
+        ? AbortSignal.any([signal, AbortSignal.timeout(12000)])
+        : AbortSignal.timeout(12000),
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ mode: "image", prompt: cleaned }),
+    });
+    if (!response.ok) {
+      try { await response.body?.cancel(); } catch {}
+      return { ...fallback, enhanced: false, enhancer: "local", reason: "Penyempurna AI tidak tersedia; prompt lokal digunakan." };
+    }
+    const result = await response.json();
+    const plan = validateImagePromptPlan(result, cleaned);
+    return {
+      ...plan,
+      enhanced: result.enhanced === true && plan.prompt !== fallback.prompt,
+      enhancer: result.enhancer === "groq" ? "groq" : "local",
+      enhancerModel: typeof result.enhancerModel === "string" ? result.enhancerModel : "deterministic-fallback",
+      ...(!result.enhanced ? { reason: "Penyempurnaan AI tidak tersedia; prompt lokal digunakan." } : {}),
+    };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return { ...fallback, enhanced: false, enhancer: "local", reason: "Penyempurna AI tidak terjangkau; prompt lokal digunakan." };
+  }
+}
+
+export async function transcribeVoiceAudio(audio, { authToken, language, signal } = {}) {
+  if (!AI_API_URL) throw new Error("URL API AI belum tersedia.");
+  const apiBase = AI_API_URL.replace(/\/+$/, "");
+  const form = new FormData();
+  form.append("audio", audio, audio.name || "myai-voice.webm");
+  if (language && language !== "auto") {
+    form.append("language", language.split("-")[0].toLowerCase());
+  }
+  return transcribeThroughServer(apiBase, form, authToken, signal);
+}
+
+async function transcribeThroughServer(apiBase, form, authToken, signal) {
+  const guest = !authToken;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  const abortRequest = () => controller.abort();
+  signal?.addEventListener("abort", abortRequest, { once: true });
+  try {
+    const response = await fetch(`${apiBase}/${guest ? "guest/" : ""}transcribe`, {
+      method: "POST",
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      body: form,
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(await errorText(response));
+    const result = await response.json();
+    if (typeof result.text !== "string" || !result.text.trim()) {
+      throw new Error("Layanan transkripsi tidak mengembalikan teks.");
+    }
+    return result.text.trim();
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error?.name === "AbortError") {
+      throw new Error("Transkripsi lewat server melewati batas 45 detik.");
+    }
+    if (error instanceof TypeError) {
+      throw new Error("API Worker tidak dapat dijangkau. Periksa koneksi atau deploy Worker terbaru.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortRequest);
+  }
+}
+
+export async function* streamChat(provider, model, messages, opts, signal) {
+  if (["pollinations", "server-gemini-image"].includes(provider) && opts?.imageGeneration !== true) {
+    throw new Error("Model pembuatan gambar tidak dapat digunakan untuk chat teks. Pilih model chat atau aktifkan Mode Gambar.");
+  }
+  if (provider === "server-gemini-image") {
+    throw new Error("Model Gemini Image harus dipanggil melalui endpoint khusus gambar.");
+  }
+  const requestGuard = createRequestGuard(signal);
+  const guardedOptions = { ...opts, requestGuard };
+  try {
+    let stream;
+    if (provider.startsWith("gateway-")) {
+      stream = gatewayStream(provider.slice("gateway-".length), model, messages, guardedOptions, requestGuard.signal);
+    } else if (provider === "pollinations") {
+      stream = pollinationsStream(model, messages, guardedOptions, requestGuard.signal);
+    } else if (provider === "guest") {
+      stream = guestStream(model, messages, guardedOptions, requestGuard.signal);
+    } else if (provider.startsWith("manual-")) {
+      throw new Error("Chat teks kini harus memakai model Cloudflare Worker. Pilih model server dari katalog AI.");
+    } else {
+      stream = serverStream(provider, model, messages, guardedOptions, requestGuard.signal);
+    }
+    for await (const chunk of stream) {
+      requestGuard.touch();
+      yield chunk;
+    }
+  } catch (error) {
+    if (requestGuard.timedOut) {
+      throw new Error(`Koneksi model ${model} tidak menerima data selama ${Math.round(CHAT_STREAM_IDLE_TIMEOUT_MS / 1000)} detik. Coba lagi atau pilih model lain.`);
+    }
+    throw error;
+  } finally {
+    requestGuard.cleanup();
+  }
+}
+
+async function* gatewayStream(provider, model, messages, opts, signal) {
+  if (!AI_API_URL) throw new Error("URL API Cloudflare Pages belum diatur di js/config.js.");
+  if (!opts.authToken) throw new Error("Masuk dengan akun yang diizinkan untuk memakai AI gateway.");
+  const body = JSON.stringify({
+    provider,
+    model,
+    messages,
+    temperature: opts.temperature,
+    webSearch: opts.webSearch === true,
+    researchMode: opts.researchMode === true,
+    customInstructions: opts.customInstructions,
+  });
+  if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) {
+    throw new Error("Permintaan AI gateway maksimal 4 MiB. Hapus beberapa lampiran atau mulai chat baru.");
+  }
+  const apiBase = AI_API_URL.replace(/\/+$/, "");
+  let response;
+  try {
+    response = await fetch(`${apiBase}/gateway`, {
+      method: "POST",
+      signal,
+      headers: {
+        Authorization: `Bearer ${opts.authToken}`,
+        "Content-Type": "application/json",
+      },
+      body,
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error?.name === "AbortError") throw new Error("AI gateway melewati batas waktu. Coba lagi.");
+    throw new Error("AI gateway tidak dapat dijangkau. Periksa route Cloudflare Worker/Pages.");
+  }
+  if (!response.ok) throw new Error(await errorText(response));
+  if (!response.body) throw new Error("AI gateway tidak mengembalikan aliran jawaban.");
+  for await (const result of readSSE(response, opts.requestGuard)) {
+    if (result.error) throw new Error(result.error.message || "Error dari AI gateway.");
+    if (result.myaiUsage) yield { usage: result.myaiUsage };
+    if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
+    if (result.myaiFallback) yield { fallback: result.myaiFallback };
+    if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };
+    const annotations = result.choices?.[0]?.delta?.annotations || [];
+    for (const annotation of annotations) {
+      if (annotation.type === "url_citation" && annotation.url_citation?.url) {
+        yield { citation: { url: annotation.url_citation.url, title: annotation.url_citation.title } };
+      }
+    }
+    const delta = result.choices?.[0]?.delta;
+    if (delta?.reasoning) yield { reasoning: delta.reasoning };
+    if (delta?.content) yield { content: delta.content };
+  }
+}
+
+function normalizeUsage(usage) {
+  const promptTokens = Number(usage.prompt_tokens ?? usage.promptTokenCount ?? usage.input_tokens ?? 0);
+  const completionTokens = Number(usage.completion_tokens ?? usage.candidatesTokenCount ?? usage.output_tokens ?? 0);
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: Number(usage.total_tokens ?? usage.totalTokenCount ?? promptTokens + completionTokens),
+  };
+}
+
+async function* serverStream(provider, model, messages, opts, signal) {
+  if (!AI_API_URL) throw new Error("URL API Cloudflare Pages belum diatur di js/config.js.");
+  if (!opts.authToken) throw new Error("Masuk dengan Google untuk memakai API AI server.");
+  const imageSize = opts.imageGeneration
+    ? pollinationsSize(String([...messages].reverse().find((message) => message.role === "user")?.content || ""))
+    : null;
+  const body = JSON.stringify({
+    provider,
+    model,
+    messages,
+    temperature: opts.temperature,
+    webSearch: opts.webSearch,
+    researchMode: opts.researchMode,
+    imageGeneration: opts.imageGeneration,
+    generateImage: opts.generateImage === true,
+    imageModel: opts.imageModel || "flux",
+    ...(imageSize ? { imageWidth: imageSize[0], imageHeight: imageSize[1] } : {}),
+    customInstructions: opts.customInstructions,
+  });
+  if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) {
+    throw new Error("Permintaan online maksimal 4 MiB. Hapus beberapa lampiran atau lanjutkan chat baru.");
+  }
+  const apiBase = AI_API_URL.replace(/\/+$/, "");
+  const response = await fetch(`${apiBase}/chat`, {
+    method: "POST",
+    signal,
+    headers: {
+      Authorization: `Bearer ${opts.authToken}`,
+      "Content-Type": "application/json",
+    },
+    body,
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+
+  if (opts.imageGeneration) {
+    const markdownImage = parsePollinationsMarkdownImage(await response.text());
+    if (!markdownImage) throw new Error("Backend tidak mengembalikan URL gambar Pollinations yang valid.");
+    yield { image: markdownImage };
+    return;
+  }
+
+  if (provider === "modelscope") {
+    const result = await response.json();
+    const content = result.choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) {
+      throw new Error("ModelScope tidak mengembalikan teks jawaban yang valid.");
+    }
+    const usage = result.usage || result.usageMetadata;
+    if (usage) yield { usage: normalizeUsage(usage) };
+    yield { content };
+    return;
+  }
+
+  if (!response.body) throw new Error("Backend AI tidak mengembalikan aliran jawaban.");
+  if (provider === "gemini") {
+    const cited = new Set();
+    for await (const result of readSSE(response, opts.requestGuard)) {
+      if (result.myaiUsage) yield { usage: result.myaiUsage };
+      if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
+      if (result.myaiFallback) yield { fallback: result.myaiFallback };
+      if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };
+      for (const part of result.candidates?.[0]?.content?.parts || []) {
+        if (!part.text) continue;
+        if (part.thought) yield { reasoning: part.text };
+        else yield { content: part.text };
+      }
+      for (const source of result.candidates?.[0]?.groundingMetadata?.groundingChunks || []) {
+        if (source.web?.uri && !cited.has(source.web.uri)) {
+          cited.add(source.web.uri);
+          yield { citation: { url: source.web.uri, title: source.web.title } };
+        }
+      }
+    }
+    return;
+  }
+
+  for await (const result of readSSE(response, opts.requestGuard)) {
+    if (result.error) throw new Error(result.error.message || "Error dari server provider.");
+    if (result.myaiUsage) yield { usage: result.myaiUsage };
+    if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
+    if (result.myaiFallback) yield { fallback: result.myaiFallback };
+    if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };
+    const annotations = result.choices?.[0]?.delta?.annotations || result.choices?.[0]?.message?.annotations || [];
+    for (const annotation of annotations) {
+      if (annotation.type === "url_citation" && annotation.url_citation?.url) {
+        yield {
+          citation: {
+            url: annotation.url_citation.url,
+            title: annotation.url_citation.title,
+          },
+        };
+      }
+    }
+    const delta = result.choices?.[0]?.delta;
+    if (delta?.reasoning) yield { reasoning: delta.reasoning };
+    if (delta?.content) yield { content: delta.content };
+  }
+}

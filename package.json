@@ -1,0 +1,42 @@
+{
+  "name": "myai-mobile",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 4173",
+    "build": "npm run build:web",
+    "build:web": "vite build",
+    "test:features": "node scripts/e2e-features.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "worker:dev": "npx --yes wrangler@4.152.0 dev --config worker/wrangler.toml",
+    "worker:deploy": "npx --yes wrangler@4.152.0 deploy --config worker/wrangler.toml",
+    "worker:secret": "npx --yes wrangler@4.152.0 secret put --config worker/wrangler.toml",
+    "cap:add:android": "cap add android",
+    "cap:add:ios": "cap add ios",
+    "cap:sync": "npm run build:web && cap sync && node scripts/configure-native.mjs",
+    "cap:open:android": "cap open android",
+    "cap:open:ios": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor-firebase/authentication": "^7.0.0",
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "firebase": "^11.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "docx": "9.5.1",
+    "jspdf": "4.2.1",
+    "jspdf-autotable": "5.0.9",
+    "jszip": "3.10.1",
+    "mammoth": "1.13.0",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "4.4.168",
+    "pngjs": "7.0.0",
+    "pptxgenjs": "3.12.0",
+    "vite": "^6.0.0",
+    "xlsx-js-style": "1.2.0"
+  }
+}

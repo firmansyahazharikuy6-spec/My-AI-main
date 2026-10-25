@@ -1,0 +1,991 @@
+const LANGUAGE_KEY = "myai_selected_lang";
+let activeLanguage = "en";
+const TIER_UI_TRANSLATIONS = {
+  en: {
+    tierEyebrow: "MYAI ENGINE SELECTOR", tierDialogTitle: "Choose your AI engine",
+    tierDialogCopy: "Choose a model tier; this only changes model access. Provider rates and quotas still apply.", tierActive: "Status: Active",
+    tierReady: "Status: Ready", tierSelected: "Status: Selected", tierConfirm: "🚀 Activate engine",
+    tierFreeFeature0: "Basic-access models; provider charges may apply", tierFreeFeature1: "Basic chat and image creation", tierFreeFeature2: "Great for everyday tasks",
+    tierBasicFeature0: "Fast cloud models", tierBasicFeature1: "File and document analysis", tierBasicFeature2: "Great for routine work",
+    tierProFeature0: "Reasoning and coding models", tierProFeature1: "More complex work context", tierProFeature2: "Built for professionals",
+    tierMaxFeature0: "Largest configured models", tierMaxFeature1: "Maximum reasoning and context", tierMaxFeature2: "Built for demanding work",
+    tierFreeButton: "Use Free plan", tierBasicButton: "Choose Basic plan",
+    tierProButton: "Choose Pro plan", tierMaxButton: "Activate Max plan",
+    profileName: "Name", profileRole: "Role / profession", profileTone: "Preferred tone",
+    profileNamePlaceholder: "How should MyAI address you?", profileRolePlaceholder: "Example: teacher, designer, student",
+    profileTonePlaceholder: "Example: warm, concise, professional",
+    profilePreferences: "Preferences", profilePreferencesPlaceholder: "Example: metric units, concise answers, include practical examples",
+    promptSuggestionDescription: "Choose the clearest prompt for your goal. It will replace your draft and remains editable.",
+  },
+  id: {
+    tierEyebrow: "PEMILIH ENGINE MYAI", tierDialogTitle: "Pilih engine AI",
+    tierDialogCopy: "Tier hanya mengatur akses model; tarif dan kuota provider tetap berlaku.", tierActive: "Status: Aktif",
+    tierReady: "Status: Siap", tierSelected: "Status: Dipilih", tierConfirm: "🚀 Aktifkan engine",
+    tierFreeFeature0: "Model akses dasar; tarif provider dapat berlaku", tierFreeFeature1: "Chat dan pembuatan gambar dasar", tierFreeFeature2: "Cocok untuk kebutuhan harian",
+    tierBasicFeature0: "Model cloud ringan dan cepat", tierBasicFeature1: "Analisis file dan dokumen", tierBasicFeature2: "Cocok untuk pekerjaan rutin",
+    tierProFeature0: "Model reasoning dan coding", tierProFeature1: "Konteks kerja lebih kompleks", tierProFeature2: "Cocok untuk profesional",
+    tierMaxFeature0: "Model besar yang dikonfigurasi", tierMaxFeature1: "Penalaran dan konteks maksimum", tierMaxFeature2: "Cocok untuk tugas paling berat",
+    tierFreeButton: "Gunakan paket Free", tierBasicButton: "Pilih paket Basic",
+    tierProButton: "Pilih paket Pro", tierMaxButton: "Aktifkan paket Max",
+    profileName: "Nama", profileRole: "Peran / profesi", profileTone: "Gaya bahasa",
+    profileNamePlaceholder: "Bagaimana MyAI sebaiknya menyapamu?", profileRolePlaceholder: "Contoh: guru, desainer, mahasiswa",
+    profileTonePlaceholder: "Contoh: ramah, ringkas, profesional",
+    profilePreferences: "Preferensi", profilePreferencesPlaceholder: "Contoh: satuan metrik, jawaban ringkas, sertakan contoh praktis",
+    promptSuggestionDescription: "Pilih prompt yang paling jelas untuk tujuanmu. Pilihan akan mengganti draft dan tetap bisa diedit.",
+  },
+  es: {
+    tierEyebrow: "SELECTOR DE MOTOR MYAI", tierDialogTitle: "Elige tu motor de IA",
+    tierDialogCopy: "El nivel solo cambia el acceso a modelos; pueden aplicarse tarifas y cuotas del proveedor.", tierActive: "Estado: Activo",
+    tierReady: "Estado: Listo", tierSelected: "Estado: Seleccionado", tierConfirm: "🚀 Activar motor",
+    tierFreeFeature0: "Modelos de acceso básico; pueden aplicarse cargos del proveedor", tierFreeFeature1: "Chat e imágenes básicas", tierFreeFeature2: "Para tareas diarias",
+    tierBasicFeature0: "Modelos rápidos en la nube", tierBasicFeature1: "Análisis de archivos y documentos", tierBasicFeature2: "Para trabajo rutinario",
+    tierProFeature0: "Modelos de razonamiento y código", tierProFeature1: "Contexto de trabajo más complejo", tierProFeature2: "Para profesionales",
+    tierMaxFeature0: "Modelos configurados de mayor tamaño", tierMaxFeature1: "Máximo razonamiento y contexto", tierMaxFeature2: "Para tareas exigentes",
+    tierFreeButton: "Usar motor Free", tierBasicButton: "Elegir motor Basic",
+    tierProButton: "Elegir motor Pro", tierMaxButton: "Activar motor Max",
+    profileName: "Nombre", profileRole: "Cargo / profesión", profileTone: "Tono preferido",
+    profileNamePlaceholder: "¿Cómo debería llamarte MyAI?", profileRolePlaceholder: "Ejemplo: docente, diseñador, estudiante",
+    profileTonePlaceholder: "Ejemplo: cercano, conciso, profesional",
+    profilePreferences: "Preferencias", profilePreferencesPlaceholder: "Ejemplo: unidades métricas, respuestas concisas, ejemplos prácticos",
+    promptSuggestionDescription: "Elige el prompt más claro para tu objetivo. Reemplazará el borrador y seguirá siendo editable.",
+  },
+  fr: {
+    tierEyebrow: "SÉLECTEUR DE MOTEUR MYAI", tierDialogTitle: "Choisissez votre moteur IA",
+    tierDialogCopy: "Le niveau modifie uniquement l’accès aux modèles ; les tarifs et quotas du fournisseur s’appliquent.", tierActive: "Statut : actif",
+    tierReady: "Statut : prêt", tierSelected: "Statut : sélectionné", tierConfirm: "🚀 Activer le moteur",
+    tierFreeFeature0: "Modèles d’accès de base ; des frais fournisseur peuvent s’appliquer", tierFreeFeature1: "Chat et images de base", tierFreeFeature2: "Pour les tâches quotidiennes",
+    tierBasicFeature0: "Modèles cloud rapides", tierBasicFeature1: "Analyse de fichiers et documents", tierBasicFeature2: "Pour le travail courant",
+    tierProFeature0: "Modèles de raisonnement et de code", tierProFeature1: "Contexte de travail plus complexe", tierProFeature2: "Pour les professionnels",
+    tierMaxFeature0: "Plus grands modèles configurés", tierMaxFeature1: "Raisonnement et contexte maximum", tierMaxFeature2: "Pour les tâches exigeantes",
+    tierFreeButton: "Utiliser le moteur Free", tierBasicButton: "Choisir le moteur Basic",
+    tierProButton: "Choisir le moteur Pro", tierMaxButton: "Activer le moteur Max",
+    profileName: "Nom", profileRole: "Rôle / profession", profileTone: "Ton préféré",
+    profileNamePlaceholder: "Comment MyAI doit-il vous appeler ?", profileRolePlaceholder: "Exemple : enseignant, designer, étudiant",
+    profileTonePlaceholder: "Exemple : chaleureux, concis, professionnel",
+    profilePreferences: "Préférences", profilePreferencesPlaceholder: "Exemple : unités métriques, réponses concises, exemples pratiques",
+    promptSuggestionDescription: "Choisissez le prompt le plus clair pour votre objectif. Il remplacera le brouillon et restera modifiable.",
+  },
+};
+
+const LANGUAGE_NAMES = {
+  en: "English",
+  id: "Bahasa Indonesia",
+  es: "Español",
+  fr: "Français",
+  de: "Deutsch",
+  pt: "Português",
+  ja: "日本語",
+  ko: "한국어",
+  zh: "中文",
+  hi: "हिन्दी",
+  ar: "العربية",
+  ru: "Русский",
+  tr: "Türkçe",
+  vi: "Tiếng Việt",
+  th: "ไทย",
+  it: "Italiano",
+  nl: "Nederlands",
+};
+
+const TRANSLATION_KEYS = [
+  "landingEyebrow", "landingTitle", "landingCopy", "startFreeChat", "signInGoogle", "landingNote",
+  "welcome", "loginDescription", "continueGoogle", "newChat", "searchChats", "images",
+  "attachments", "chats", "workFolders", "personalization", "writeMessage",
+  "promptImproveShort", "promptSuggestShort", "promptSuggestionTitle", "promptSuggestionDescription",
+  "modeGeneral", "modeChat", "modeImage",
+];
+
+const TRANSLATIONS = Object.fromEntries([
+  ["id", [
+    "ASISTEN AI PRIBADIMU", "Semua AI favoritmu,<br><span>dalam satu tempat.</span>",
+    "Coba dua jawaban AI gratis tanpa masuk. Masuk dengan Google untuk terus memakai model gratis dan menyinkronkan percakapan.",
+    "Mulai chat gratis", "Masuk dengan Google",
+    "Dua jawaban per alamat IP · Model cloud memerlukan internet.",
+    "Selamat datang di MyAI", "Masuk dengan Google untuk terus memakai model AI Basic gratis dan menyinkronkan riwayat chat serta pengaturan.",
+    "Lanjutkan dengan Google", "Obrolan baru", "Cari obrolan", "Gambar", "Lampiran", "Obrolan",
+    "Folder kerja", "Personalisasi", "Tulis pesan",
+    "Rapikan", "Saran", "Pilih prompt", "Pilih satu saran untuk mengganti draf. Kamu masih bisa mengeditnya setelah itu.",
+    "Umum", "Ngobrol", "Gambar",
+  ]],
+  ["es", [
+    "TU ASISTENTE DE IA PERSONAL", "Todas tus IA favoritas,<br><span>en un solo lugar.</span>",
+    "Prueba dos respuestas de IA gratis sin iniciar sesión. Inicia sesión con Google para seguir usando modelos gratuitos y sincronizar tus conversaciones.",
+    "Iniciar chat gratis", "Iniciar sesión con Google",
+    "Dos respuestas por dirección IP · Los modelos en la nube requieren internet.",
+    "Te damos la bienvenida a MyAI", "Inicia sesión con Google para seguir usando modelos Basic gratuitos y sincronizar tus chats y ajustes.",
+    "Continuar con Google", "Nuevo chat", "Buscar chats", "Imágenes", "Archivos adjuntos", "Chats",
+    "Carpetas de trabajo", "Personalización", "Escribe un mensaje",
+    "Mejorar", "Ideas", "Elige un prompt", "Elige una sugerencia para reemplazar el borrador. Después podrás editarlo.",
+    "General", "Chat", "Imagen",
+  ]],
+  ["fr", [
+    "VOTRE ASSISTANT IA PERSONNEL", "Toutes vos IA préférées,<br><span>au même endroit.</span>",
+    "Essayez deux réponses d’IA gratuites sans vous connecter. Connectez-vous avec Google pour continuer à utiliser les modèles gratuits et synchroniser vos conversations.",
+    "Démarrer un chat gratuit", "Se connecter avec Google",
+    "Deux réponses par adresse IP · Les modèles cloud nécessitent Internet.",
+    "Bienvenue sur MyAI", "Connectez-vous avec Google pour continuer à utiliser les modèles Basic gratuits et synchroniser vos discussions et paramètres.",
+    "Continuer avec Google", "Nouveau chat", "Rechercher des chats", "Images", "Pièces jointes", "Chats",
+    "Dossiers de travail", "Personnalisation", "Écrire un message",
+    "Améliorer", "Idées", "Choisir un prompt", "Choisissez une suggestion pour remplacer le brouillon. Vous pourrez le modifier ensuite.",
+    "Général", "Discussion", "Image",
+  ]],
+  ["de", [
+    "DEIN PERSÖNLICHER KI-ASSISTENT", "All deine Lieblings-KIs,<br><span>an einem Ort.</span>",
+    "Probiere zwei kostenlose KI-Antworten ohne Anmeldung aus. Melde dich mit Google an, um kostenlose Modelle weiter zu nutzen und deine Chats zu synchronisieren.",
+    "Kostenlosen Chat starten", "Mit Google anmelden",
+    "Zwei Antworten pro IP-Adresse · Cloud-Modelle benötigen Internet.",
+    "Willkommen bei MyAI", "Melde dich mit Google an, um kostenlose Basic-Modelle weiter zu nutzen und Chats sowie Einstellungen zu synchronisieren.",
+    "Weiter mit Google", "Neuer Chat", "Chats suchen", "Bilder", "Anhänge", "Chats",
+    "Arbeitsordner", "Personalisierung", "Nachricht schreiben",
+    "Verbessern", "Ideen", "Prompt auswählen", "Wähle einen Vorschlag aus, um deinen Entwurf zu ersetzen. Du kannst ihn anschließend bearbeiten.",
+    "Allgemein", "Chat", "Bild",
+  ]],
+  ["pt", [
+    "SEU ASSISTENTE PESSOAL DE IA", "Suas IAs favoritas,<br><span>em um só lugar.</span>",
+    "Experimente duas respostas de IA grátis sem entrar. Entre com o Google para continuar usando modelos gratuitos e sincronizar suas conversas.",
+    "Iniciar conversa grátis", "Entrar com o Google",
+    "Duas respostas por endereço IP · Modelos na nuvem precisam de internet.",
+    "Bem-vindo ao MyAI", "Entre com o Google para continuar usando modelos Basic gratuitos e sincronizar conversas e configurações.",
+    "Continuar com o Google", "Nova conversa", "Buscar conversas", "Imagens", "Anexos", "Conversas",
+    "Pastas de trabalho", "Personalização", "Escreva uma mensagem",
+    "Melhorar", "Ideias", "Escolha um prompt", "Escolha uma sugestão para substituir o rascunho. Você poderá editá-la depois.",
+    "Geral", "Conversa", "Imagem",
+  ]],
+  ["ja", [
+    "あなた専用のAIアシスタント", "お気に入りのAIを<br><span>ひとつの場所に。</span>",
+    "ログインせずにAIの回答を2回無料で試せます。Googleでログインすると、無料モデルの利用と会話の同期を続けられます。",
+    "無料チャットを始める", "Googleでログイン",
+    "IPアドレスごとに2回まで · クラウドモデルにはインターネットが必要です。",
+    "MyAIへようこそ", "Googleでログインすると、無料のBasicモデルを引き続き利用でき、チャットと設定を同期できます。",
+    "Googleで続行", "新しいチャット", "チャットを検索", "画像", "添付ファイル", "チャット",
+    "作業フォルダー", "カスタマイズ", "メッセージを入力",
+    "改善", "アイデア", "プロンプトを選択", "候補を選ぶと下書きが置き換わります。選択後に編集できます。",
+    "一般", "チャット", "画像",
+  ]],
+  ["ko", [
+    "나만의 AI 어시스턴트", "좋아하는 AI를<br><span>한곳에서 만나세요.</span>",
+    "로그인 없이 AI 답변을 두 번 무료로 사용해 보세요. Google로 로그인하면 무료 모델을 계속 사용하고 대화를 동기화할 수 있습니다.",
+    "무료 채팅 시작", "Google로 로그인",
+    "IP 주소당 답변 2회 · 클라우드 모델은 인터넷이 필요합니다.",
+    "MyAI에 오신 것을 환영합니다", "Google로 로그인하면 무료 Basic 모델을 계속 사용하고 대화와 설정을 동기화할 수 있습니다.",
+    "Google로 계속", "새 채팅", "채팅 검색", "이미지", "첨부 파일", "채팅",
+    "작업 폴더", "개인 설정", "메시지 입력",
+    "개선", "아이디어", "프롬프트 선택", "제안을 선택하면 초안이 바뀝니다. 선택 후에도 편집할 수 있습니다.",
+    "일반", "채팅", "이미지",
+  ]],
+  ["zh", [
+    "你的专属 AI 助手", "你喜爱的 AI，<br><span>尽在一处。</span>",
+    "无需登录即可免费体验两次 AI 回复。使用 Google 登录后，可继续使用免费模型并同步对话。",
+    "开始免费聊天", "使用 Google 登录",
+    "每个 IP 地址可获两次回复 · 云端模型需要互联网。",
+    "欢迎使用 MyAI", "使用 Google 登录即可继续使用免费 Basic 模型，并同步聊天记录和设置。",
+    "使用 Google 继续", "新建聊天", "搜索聊天", "图片", "附件", "聊天",
+    "工作文件夹", "个性化", "输入消息",
+    "优化", "灵感", "选择提示词", "选择一条建议以替换草稿，之后仍可编辑。",
+    "通用", "聊天", "图片",
+  ]],
+  ["hi", [
+    "आपका निजी AI सहायक", "आपके पसंदीदा AI,<br><span>एक ही जगह पर।</span>",
+    "बिना साइन इन किए AI के दो जवाब मुफ़्त आज़माएँ। मुफ़्त मॉडल इस्तेमाल करने और बातचीत सिंक करने के लिए Google से साइन इन करें।",
+    "मुफ़्त चैट शुरू करें", "Google से साइन इन करें",
+    "हर IP पते पर दो जवाब · क्लाउड मॉडल के लिए इंटरनेट ज़रूरी है।",
+    "MyAI में आपका स्वागत है", "मुफ़्त Basic मॉडल इस्तेमाल करने और चैट व सेटिंग सिंक करने के लिए Google से साइन इन करें।",
+    "Google के साथ जारी रखें", "नई चैट", "चैट खोजें", "छवियाँ", "अटैचमेंट", "चैट",
+    "काम के फ़ोल्डर", "निजीकरण", "संदेश लिखें",
+    "बेहतर करें", "विचार", "प्रॉम्प्ट चुनें", "ड्राफ़्ट बदलने के लिए सुझाव चुनें। बाद में आप इसे संपादित कर सकते हैं।",
+    "सामान्य", "चैट", "छवि",
+  ]],
+  ["ar", [
+    "مساعدك الشخصي بالذكاء الاصطناعي", "كل أدوات الذكاء الاصطناعي المفضلة،<br><span>في مكان واحد.</span>",
+    "جرّب إجابتين مجانيتين من الذكاء الاصطناعي دون تسجيل الدخول. سجّل الدخول باستخدام Google لمتابعة استخدام النماذج المجانية ومزامنة محادثاتك.",
+    "بدء محادثة مجانية", "تسجيل الدخول باستخدام Google",
+    "إجابتان لكل عنوان IP · تتطلب النماذج السحابية الإنترنت.",
+    "مرحبًا بك في MyAI", "سجّل الدخول باستخدام Google لمتابعة استخدام نماذج Basic المجانية ومزامنة المحادثات والإعدادات.",
+    "المتابعة باستخدام Google", "محادثة جديدة", "البحث في المحادثات", "الصور", "المرفقات", "المحادثات",
+    "مجلدات العمل", "التخصيص", "اكتب رسالة",
+    "تحسين", "أفكار", "اختر مطالبة", "اختر اقتراحًا لاستبدال المسودة. يمكنك تعديلها بعد ذلك.",
+    "عام", "محادثة", "صورة",
+  ]],
+  ["ru", [
+    "ВАШ ЛИЧНЫЙ ИИ-АССИСТЕНТ", "Все любимые ИИ<br><span>в одном месте.</span>",
+    "Попробуйте два бесплатных ответа ИИ без входа. Войдите через Google, чтобы продолжить пользоваться бесплатными моделями и синхронизировать переписки.",
+    "Начать бесплатный чат", "Войти через Google",
+    "Два ответа на IP-адрес · Облачным моделям нужен интернет.",
+    "Добро пожаловать в MyAI", "Войдите через Google, чтобы продолжить пользоваться бесплатными моделями Basic и синхронизировать чаты и настройки.",
+    "Продолжить с Google", "Новый чат", "Поиск чатов", "Изображения", "Вложения", "Чаты",
+    "Рабочие папки", "Персонализация", "Напишите сообщение",
+    "Улучшить", "Идеи", "Выберите промпт", "Выберите вариант, чтобы заменить черновик. После этого его можно отредактировать.",
+    "Общий", "Чат", "Изображение",
+  ]],
+  ["tr", [
+    "KİŞİSEL YAPAY ZEKA ASİSTANIN", "En sevdiğin tüm yapay zekalar,<br><span>tek bir yerde.</span>",
+    "Giriş yapmadan iki ücretsiz yapay zeka yanıtını dene. Ücretsiz modelleri kullanmaya devam etmek ve sohbetlerini eşitlemek için Google ile giriş yap.",
+    "Ücretsiz sohbet başlat", "Google ile giriş yap",
+    "IP adresi başına iki yanıt · Bulut modelleri internet gerektirir.",
+    "MyAI'ye hoş geldin", "Ücretsiz Basic modelleri kullanmaya ve sohbetlerini ve ayarlarını eşitlemeye devam etmek için Google ile giriş yap.",
+    "Google ile devam et", "Yeni sohbet", "Sohbetleri ara", "Görseller", "Ekler", "Sohbetler",
+    "Çalışma klasörleri", "Kişiselleştirme", "Mesaj yaz",
+    "İyileştir", "Fikirler", "İstem seç", "Taslağı değiştirmek için bir öneri seç. Daha sonra düzenleyebilirsin.",
+    "Genel", "Sohbet", "Görsel",
+  ]],
+  ["vi", [
+    "TRỢ LÝ AI CÁ NHÂN CỦA BẠN", "Tất cả AI yêu thích,<br><span>trong một nơi.</span>",
+    "Dùng thử miễn phí hai câu trả lời AI mà không cần đăng nhập. Đăng nhập Google để tiếp tục dùng mô hình miễn phí và đồng bộ cuộc trò chuyện.",
+    "Bắt đầu trò chuyện miễn phí", "Đăng nhập bằng Google",
+    "Hai câu trả lời cho mỗi địa chỉ IP · Mô hình đám mây cần internet.",
+    "Chào mừng đến với MyAI", "Đăng nhập Google để tiếp tục sử dụng mô hình Basic miễn phí và đồng bộ lịch sử trò chuyện cùng cài đặt.",
+    "Tiếp tục với Google", "Cuộc trò chuyện mới", "Tìm cuộc trò chuyện", "Hình ảnh", "Tệp đính kèm", "Trò chuyện",
+    "Thư mục công việc", "Cá nhân hóa", "Nhập tin nhắn",
+    "Cải thiện", "Gợi ý", "Chọn prompt", "Chọn một gợi ý để thay thế bản nháp. Bạn vẫn có thể chỉnh sửa sau đó.",
+    "Chung", "Trò chuyện", "Hình ảnh",
+  ]],
+  ["th", [
+    "ผู้ช่วย AI ส่วนตัวของคุณ", "AI ที่คุณชื่นชอบ<br><span>รวมไว้ในที่เดียว</span>",
+    "ทดลองใช้คำตอบ AI ฟรีสองครั้งโดยไม่ต้องเข้าสู่ระบบ เข้าสู่ระบบด้วย Google เพื่อใช้โมเดลฟรีต่อและซิงค์บทสนทนา",
+    "เริ่มแชตฟรี", "เข้าสู่ระบบด้วย Google",
+    "ตอบได้สองครั้งต่อที่อยู่ IP · โมเดลคลาวด์ต้องใช้อินเทอร์เน็ต",
+    "ยินดีต้อนรับสู่ MyAI", "เข้าสู่ระบบด้วย Google เพื่อใช้โมเดล Basic ฟรีต่อและซิงค์ประวัติแชตกับการตั้งค่า",
+    "ดำเนินการต่อด้วย Google", "แชตใหม่", "ค้นหาแชต", "รูปภาพ", "ไฟล์แนบ", "แชต",
+    "โฟลเดอร์งาน", "ปรับแต่ง", "เขียนข้อความ",
+    "ปรับปรุง", "ไอเดีย", "เลือกพรอมป์ต์", "เลือกคำแนะนำเพื่อแทนที่ฉบับร่าง คุณยังแก้ไขได้ภายหลัง",
+    "ทั่วไป", "แชต", "รูปภาพ",
+  ]],
+  ["it", [
+    "IL TUO ASSISTENTE IA PERSONALE", "Tutte le tue IA preferite,<br><span>in un unico posto.</span>",
+    "Prova due risposte IA gratuite senza accedere. Accedi con Google per continuare a usare i modelli gratuiti e sincronizzare le conversazioni.",
+    "Inizia una chat gratuita", "Accedi con Google",
+    "Due risposte per indirizzo IP · I modelli cloud richiedono Internet.",
+    "Benvenuto in MyAI", "Accedi con Google per continuare a usare i modelli Basic gratuiti e sincronizzare chat e impostazioni.",
+    "Continua con Google", "Nuova chat", "Cerca chat", "Immagini", "Allegati", "Chat",
+    "Cartelle di lavoro", "Personalizzazione", "Scrivi un messaggio",
+    "Migliora", "Idee", "Scegli un prompt", "Scegli un suggerimento per sostituire la bozza. Potrai modificarlo in seguito.",
+    "Generale", "Chat", "Immagine",
+  ]],
+  ["nl", [
+    "JOUW PERSOONLIJKE AI-ASSISTENT", "Al je favoriete AI's,<br><span>op één plek.</span>",
+    "Probeer gratis twee AI-antwoorden zonder in te loggen. Log in met Google om gratis modellen te blijven gebruiken en je gesprekken te synchroniseren.",
+    "Gratis chat starten", "Inloggen met Google",
+    "Twee antwoorden per IP-adres · Cloudmodellen vereisen internet.",
+    "Welkom bij MyAI", "Log in met Google om gratis Basic-modellen te blijven gebruiken en je chats en instellingen te synchroniseren.",
+    "Doorgaan met Google", "Nieuwe chat", "Chats zoeken", "Afbeeldingen", "Bijlagen", "Chats",
+    "Werkmappen", "Personalisatie", "Typ een bericht",
+    "Verbeteren", "Ideeën", "Kies een prompt", "Kies een suggestie om je concept te vervangen. Je kunt deze daarna bewerken.",
+    "Algemeen", "Chat", "Afbeelding",
+  ]],
+].map(([language, values]) => [language, Object.fromEntries(TRANSLATION_KEYS.map((key, index) => [key, values[index]]))]));
+
+const LANGUAGE_TITLES = {
+  id: "Chat AI untuk bekerja, belajar, dan berkarya",
+  es: "Chat de IA para trabajar, aprender y crear",
+  fr: "Chat IA pour travailler, apprendre et créer",
+  de: "KI-Chat für Arbeit, Lernen und Kreativität",
+  pt: "Chat de IA para trabalhar, aprender e criar",
+  ja: "仕事・学習・創作のためのAIチャット",
+  ko: "업무, 학습, 창작을 위한 AI 채팅",
+  zh: "用于工作、学习和创作的 AI 聊天",
+  hi: "काम, सीखने और रचनात्मकता के लिए AI चैट",
+  ar: "دردشة الذكاء الاصطناعي للعمل والتعلم والإبداع",
+  ru: "ИИ-чат для работы, обучения и творчества",
+  tr: "İş, öğrenme ve yaratıcılık için yapay zeka sohbeti",
+  vi: "Trò chuyện AI để làm việc, học tập và sáng tạo",
+  th: "แชต AI สำหรับทำงาน เรียนรู้ และสร้างสรรค์",
+  it: "Chat IA per lavoro, studio e creatività",
+  nl: "AI-chat voor werk, leren en creativiteit",
+};
+
+const DYNAMIC_TRANSLATIONS = {
+  closeDialog: {
+    id: "Tutup", es: "Cerrar", fr: "Fermer", de: "Schließen", pt: "Fechar",
+    ja: "閉じる", ko: "닫기", zh: "关闭", hi: "बंद करें", ar: "إغلاق",
+    ru: "Закрыть", tr: "Kapat", vi: "Đóng", th: "ปิด", it: "Chiudi", nl: "Sluiten",
+  },
+  attachMenuLabel: {
+    id: "Tambah lampiran", es: "Añadir adjunto", fr: "Ajouter une pièce jointe", de: "Anhang hinzufügen",
+    pt: "Adicionar anexo", ja: "添付ファイルを追加", ko: "첨부 추가", zh: "添加附件", hi: "अटैचमेंट जोड़ें",
+    ar: "إضافة مرفق", ru: "Добавить вложение", tr: "Ek ekle", vi: "Thêm tệp đính kèm",
+    th: "เพิ่มไฟล์แนบ", it: "Aggiungi allegato", nl: "Bijlage toevoegen",
+  },
+  aiMode: {
+    id: "Jenis AI", es: "Tipo de IA", fr: "Mode IA", de: "KI-Modus", pt: "Modo de IA",
+    ja: "AIモード", ko: "AI 모드", zh: "AI 模式", hi: "AI मोड", ar: "وضع الذكاء الاصطناعي",
+    ru: "Режим ИИ", tr: "Yapay zekâ modu", vi: "Chế độ AI", th: "โหมด AI", it: "Modalità IA", nl: "AI-modus",
+  },
+  chooseAIType: {
+    id: "Pilih jenis AI", es: "Elegir tipo de IA", fr: "Choisir le mode IA", de: "KI-Modus auswählen",
+    pt: "Escolher modo de IA", ja: "AIモードを選択", ko: "AI 모드 선택", zh: "选择 AI 模式",
+    hi: "AI मोड चुनें", ar: "اختر وضع الذكاء الاصطناعي", ru: "Выберите режим ИИ", tr: "Yapay zekâ modunu seç",
+    vi: "Chọn chế độ AI", th: "เลือกโหมด AI", it: "Scegli modalità IA", nl: "AI-modus kiezen",
+  },
+  modelOther: {
+    id: "Lainnya", es: "Otros", fr: "Autres", de: "Weitere", pt: "Outros", ja: "その他", ko: "기타",
+    zh: "其他", hi: "अन्य", ar: "أخرى", ru: "Другие", tr: "Diğer", vi: "Khác", th: "อื่น ๆ", it: "Altri", nl: "Overige",
+  },
+  landingCopyAccount: {
+    id: "Coba dua jawaban AI gratis tanpa masuk. Buat akun untuk terus mengobrol dan menyinkronkan percakapan.",
+    es: "Prueba dos respuestas de IA gratis sin iniciar sesión. Crea una cuenta para seguir chateando y sincronizar tus conversaciones.",
+    fr: "Essayez deux réponses d’IA gratuites sans vous connecter. Créez un compte pour continuer à discuter et synchroniser vos conversations.",
+    de: "Probiere zwei kostenlose KI-Antworten ohne Anmeldung aus. Erstelle ein Konto, um weiterzuchatten und deine Gespräche zu synchronisieren.",
+    pt: "Experimente duas respostas de IA grátis sem entrar. Crie uma conta para continuar conversando e sincronizar suas conversas.",
+    ja: "ログインせずにAIの回答を2回無料で試せます。アカウントを作成すると、会話を続けて同期できます。",
+    ko: "로그인 없이 AI 답변을 두 번 무료로 사용해 보세요. 계정을 만들면 대화를 계속하고 동기화할 수 있습니다.",
+    zh: "无需登录即可免费体验两次 AI 回复。创建账户即可继续聊天并同步对话。",
+    hi: "बिना साइन इन किए AI के दो जवाब मुफ़्त आज़माएँ। चैट जारी रखने और बातचीत सिंक करने के लिए खाता बनाएँ।",
+    ar: "جرّب إجابتين مجانيتين من الذكاء الاصطناعي دون تسجيل الدخول. أنشئ حسابًا لمواصلة الدردشة ومزامنة محادثاتك.",
+    ru: "Попробуйте два бесплатных ответа ИИ без входа. Создайте аккаунт, чтобы продолжить общение и синхронизировать переписки.",
+    tr: "Giriş yapmadan iki ücretsiz yapay zekâ yanıtını deneyin. Sohbete devam etmek ve konuşmalarınızı eşitlemek için hesap oluşturun.",
+    vi: "Dùng thử hai câu trả lời AI miễn phí mà không cần đăng nhập. Tạo tài khoản để tiếp tục trò chuyện và đồng bộ cuộc trò chuyện.",
+    th: "ทดลองใช้คำตอบ AI ฟรีสองครั้งโดยไม่ต้องเข้าสู่ระบบ สร้างบัญชีเพื่อแชตต่อและซิงค์บทสนทนา",
+    it: "Prova due risposte IA gratuite senza accedere. Crea un account per continuare a chattare e sincronizzare le conversazioni.",
+    nl: "Probeer gratis twee AI-antwoorden zonder in te loggen. Maak een account om verder te chatten en gesprekken te synchroniseren.",
+  },
+  accountDescription: {
+    id: "Masuk atau buat akun untuk menyinkronkan chat dan pengaturan.",
+    es: "Inicia sesión o crea una cuenta para sincronizar tus chats y ajustes.",
+    fr: "Connectez-vous ou créez un compte pour synchroniser vos discussions et paramètres.",
+    de: "Melde dich an oder erstelle ein Konto, um Chats und Einstellungen zu synchronisieren.",
+    pt: "Entre ou crie uma conta para sincronizar conversas e configurações.",
+    ja: "ログインまたはアカウントを作成して、チャットと設定を同期します。",
+    ko: "로그인하거나 계정을 만들어 대화와 설정을 동기화하세요.",
+    zh: "登录或创建账户以同步聊天记录和设置。",
+    hi: "चैट और सेटिंग सिंक करने के लिए साइन इन करें या खाता बनाएँ।",
+    ar: "سجّل الدخول أو أنشئ حسابًا لمزامنة محادثاتك وإعداداتك.",
+    ru: "Войдите или создайте аккаунт, чтобы синхронизировать чаты и настройки.",
+    tr: "Sohbetlerinizi ve ayarlarınızı eşitlemek için giriş yapın veya hesap oluşturun.",
+    vi: "Đăng nhập hoặc tạo tài khoản để đồng bộ trò chuyện và cài đặt.",
+    th: "เข้าสู่ระบบหรือสร้างบัญชีเพื่อซิงค์แชตและการตั้งค่า",
+    it: "Accedi o crea un account per sincronizzare chat e impostazioni.",
+    nl: "Log in of maak een account om chats en instellingen te synchroniseren.",
+  },
+  personalizationSaved: {
+    id: "Personalisasi AI disimpan.",
+    es: "Personalización de IA guardada.",
+    fr: "Personnalisation de l’IA enregistrée.",
+    de: "KI-Personalisierung gespeichert.",
+    pt: "Personalização da IA salva.",
+    ja: "AIのパーソナライズを保存しました。",
+    ko: "AI 개인 설정을 저장했습니다.",
+    zh: "AI 个性化设置已保存。",
+    hi: "AI वैयक्तिकरण सहेजा गया।",
+    ar: "تم حفظ تخصيص الذكاء الاصطناعي.",
+    ru: "Персонализация ИИ сохранена.",
+    tr: "Yapay zekâ kişiselleştirmesi kaydedildi.",
+    vi: "Đã lưu tùy chỉnh AI.",
+    th: "บันทึกการปรับแต่ง AI แล้ว",
+    it: "Personalizzazione IA salvata.",
+    nl: "AI-personalisatie opgeslagen.",
+  },
+  defaultSystemPrompt: {
+    en: "Respond in a friendly, clear, and natural way. Prioritize answers that meet the user's needs.",
+    id: "Jawablah dengan ramah, jelas, dan alami. Utamakan jawaban yang sesuai dengan kebutuhan pengguna.",
+    es: "Responde de forma amable, clara y natural. Prioriza las respuestas que se ajusten a las necesidades del usuario.",
+    fr: "Répondez avec bienveillance, clarté et naturel. Privilégiez les réponses adaptées aux besoins de l’utilisateur.",
+    de: "Antworte freundlich, klar und natürlich. Richte die Antworten nach den Bedürfnissen der Nutzerin oder des Nutzers aus.",
+    pt: "Responda de forma amigável, clara e natural. Priorize respostas que atendam às necessidades do usuário.",
+    ja: "親しみやすく、明確で自然な回答をしてください。ユーザーのニーズに合った回答を優先してください。",
+    ko: "친절하고 명확하며 자연스럽게 답변하세요. 사용자의 필요에 맞는 답변을 우선하세요.",
+    zh: "请以友好、清晰、自然的方式回答，并优先满足用户的需求。",
+    hi: "मित्रतापूर्ण, स्पष्ट और स्वाभाविक ढंग से जवाब दें। उपयोगकर्ता की ज़रूरतों के अनुरूप जवाब को प्राथमिकता दें।",
+    ar: "أجب بطريقة ودودة وواضحة وطبيعية، واجعل الأولوية للإجابات التي تلبي احتياجات المستخدم.",
+    ru: "Отвечай дружелюбно, ясно и естественно. В первую очередь учитывай потребности пользователя.",
+    tr: "Samimi, açık ve doğal yanıt ver. Kullanıcının ihtiyaçlarını karşılayan yanıtları önceliklendir.",
+    vi: "Hãy trả lời thân thiện, rõ ràng và tự nhiên. Ưu tiên đáp ứng nhu cầu của người dùng.",
+    th: "ตอบอย่างเป็นมิตร ชัดเจน และเป็นธรรมชาติ โดยให้ความสำคัญกับความต้องการของผู้ใช้",
+    it: "Rispondi in modo cordiale, chiaro e naturale. Dai priorità alle risposte adatte alle esigenze dell’utente.",
+    nl: "Reageer vriendelijk, duidelijk en natuurlijk. Geef prioriteit aan antwoorden die aansluiten bij de behoeften van de gebruiker.",
+  },
+  openAccount: {
+    id: "Masuk atau buat akun",
+    es: "Iniciar sesión o crear una cuenta",
+    fr: "Se connecter ou créer un compte",
+    de: "Anmelden oder Konto erstellen",
+    pt: "Entrar ou criar conta",
+    ja: "ログインまたはアカウント作成",
+    ko: "로그인 또는 계정 만들기",
+    zh: "登录或创建账户",
+    hi: "साइन इन करें या खाता बनाएँ",
+    ar: "تسجيل الدخول أو إنشاء حساب",
+    ru: "Войти или создать аккаунт",
+    tr: "Giriş yap veya hesap oluştur",
+    vi: "Đăng nhập hoặc tạo tài khoản",
+    th: "เข้าสู่ระบบหรือสร้างบัญชี",
+    it: "Accedi o crea un account",
+    nl: "Inloggen of account aanmaken",
+  },
+  signInApple: {
+    id: "Lanjutkan dengan Apple",
+    es: "Continuar con Apple",
+    fr: "Continuer avec Apple",
+    de: "Mit Apple fortfahren",
+    pt: "Continuar com a Apple",
+    ja: "Appleで続行",
+    ko: "Apple로 계속",
+    zh: "使用 Apple 继续",
+    hi: "Apple के साथ जारी रखें",
+    ar: "المتابعة باستخدام Apple",
+    ru: "Продолжить с Apple",
+    tr: "Apple ile devam et",
+    vi: "Tiếp tục với Apple",
+    th: "ดำเนินการต่อด้วย Apple",
+    it: "Continua con Apple",
+    nl: "Doorgaan met Apple",
+  },
+};
+
+const APP_TEXT_KEYS = [
+  "attachImage", "attachFile", "attachFolder", "providerStatus", "searchMonid",
+  "modeCoding", "modeFlash", "modePro", "modeMax",
+  "tierFree", "tierBasic", "tierPro", "tierMax", "modelSearchPlaceholder",
+  "modelFreeBadge", "modelPaidBadge", "modelEmptyCoding", "modelEmptySearch",
+  "personalTitle", "aboutYou", "optional", "aboutPlaceholder", "aiStyle", "stylePlaceholder",
+  "languageNote", "manageChatData", "exportAllChats", "deleteAllChats", "resetPersonalization", "save",
+];
+const ENGLISH_TEXT = {
+  modeGeneral: "General", modeChat: "Chat", modeImage: "Image Gen",
+  webSearchMode: "Web search", deepResearchMode: "Deep research",
+  personalizationDescription: "Shape how MyAI works with you. Your profile and preferences apply across every model.",
+  personaSection: "Choose MyAI's approach", personaSectionHint: "A starting point, not a rigid personality.",
+  personaBalanced: "Balanced", personaBalancedDesc: "Clear, natural, adaptable", personaGeneral: "General assistant",
+  personaGeneralDesc: "Adaptable help across tasks", personaTutor: "Tutor",
+  personaTutorDesc: "Teach step by step", personaProfessional: "Professional", personaProfessionalDesc: "Focused and decisive",
+  personaCoding: "Coding partner", personaCodingDesc: "Practical, careful code", personaCreative: "Creative",
+  personaCreativeDesc: "Explore fresh angles", personaResearcher: "Researcher", personaResearcherDesc: "Evidence and clear sources",
+  responseLength: "Answer length", responseLengthHint: "Choose the usual level of detail.",
+  lengthConcise: "Concise", lengthBalanced: "Balanced", lengthDetailed: "Detailed",
+  personalProfileSection: "Your context", personalProfileHint: "Only used when it helps answer your request.",
+  personalExtraInstructions: "Anything else MyAI should keep in mind?",
+  personalInstructionsPlaceholder: "Example: Use metric units. Explain unfamiliar terms the first time.",
+  personalPreview: "MYAI PREVIEW", personalPreviewNote: "Your actual request always takes priority.",
+  homeWelcomeBack: "Welcome back",
+  homeIntro: "What would you like to accomplish today? Choose a workspace or write your own request below.",
+  homeIntegrations: "Connected services",
+  homeDocumentTitle: "Document AI", homeDocumentDescription: "Draft, summarize, and improve documents.",
+  homeCodeTitle: "Code Architect", homeCodeDescription: "Design, debug, and review production code.",
+  homeBrainstormTitle: "Brainstorming", homeBrainstormDescription: "Turn an early thought into useful directions.",
+  homeResearchTitle: "Deep Research", homeResearchDescription: "Prepare a rigorous, source-based research brief.",
+  homeDocumentPrompt: "Help me create a document about [topic] for [audience]. Ask for essential missing details, then provide a clear structure and a polished draft.",
+  homeCodePrompt: "Act as a code architect. Help me design or improve [feature] using [language/framework]. Consider requirements, security, maintainability, and testing.",
+  homeBrainstormPrompt: "Help me brainstorm practical ideas for [goal]. Consider my context and constraints, group the strongest directions, and suggest the best next step.",
+  homeResearchPrompt: "Help me prepare a deep-research plan about [topic]. Identify the key questions, evidence needed, trustworthy source types, comparison criteria, and a clear report structure.",
+  appearanceSection: "Language and appearance", appearanceSectionHint: "Choose the interface language and light or dark theme.",
+  interfaceLanguage: "Interface language", colorTheme: "Color theme",
+  themeDark: "Dark", themeLight: "Light",
+  activateLightTheme: "Switch to light theme", activateDarkTheme: "Switch to dark theme",
+};
+const INDONESIAN_TEXT = {
+  webSearchMode: "Cari di web", deepResearchMode: "Riset mendalam",
+  personalizationDescription: "Atur cara MyAI bekerja bersama kamu. Profil dan preferensimu berlaku untuk semua model.",
+  personaSection: "Pilih pendekatan MyAI", personaSectionHint: "Titik awal yang bisa kamu ubah kapan saja.",
+  personaBalanced: "Seimbang", personaBalancedDesc: "Jelas, natural, fleksibel", personaGeneral: "Asisten umum",
+  personaGeneralDesc: "Bantuan adaptif untuk beragam tugas", personaTutor: "Tutor",
+  personaTutorDesc: "Mengajar tahap demi tahap", personaProfessional: "Profesional", personaProfessionalDesc: "Fokus dan tegas",
+  personaCoding: "Partner coding", personaCodingDesc: "Praktis dan teliti", personaCreative: "Kreatif",
+  personaCreativeDesc: "Mencari sudut pandang baru", personaResearcher: "Peneliti", personaResearcherDesc: "Berbasis bukti dan sumber jelas",
+  responseLength: "Panjang jawaban", responseLengthHint: "Pilih tingkat detail yang biasanya kamu suka.",
+  lengthConcise: "Ringkas", lengthBalanced: "Seimbang", lengthDetailed: "Mendalam",
+  personalProfileSection: "Konteks tentang kamu", personalProfileHint: "Dipakai hanya saat membantu menjawab permintaanmu.",
+  personalExtraInstructions: "Hal lain yang perlu diingat MyAI?",
+  personalInstructionsPlaceholder: "Contoh: Gunakan satuan metrik. Jelaskan istilah baru saat pertama kali muncul.",
+  personalPreview: "PRATINJAU MYAI", personalPreviewNote: "Permintaanmu saat ini selalu menjadi prioritas.",
+  homeWelcomeBack: "Selamat datang kembali",
+  homeIntro: "Apa yang ingin kamu selesaikan hari ini? Pilih ruang kerja atau tulis permintaanmu sendiri di bawah.",
+  homeIntegrations: "Layanan terhubung",
+  homeDocumentTitle: "Document AI", homeDocumentDescription: "Susun, ringkas, dan sempurnakan dokumen.",
+  homeCodeTitle: "Code Architect", homeCodeDescription: "Rancang, perbaiki, dan tinjau kode produksi.",
+  homeBrainstormTitle: "Brainstorming", homeBrainstormDescription: "Ubah ide awal menjadi arah yang berguna.",
+  homeResearchTitle: "Deep Research", homeResearchDescription: "Siapkan riset mendalam yang berbasis sumber.",
+  homeDocumentPrompt: "Bantu saya membuat dokumen tentang [topik] untuk [audiens]. Tanyakan detail penting yang belum ada, lalu berikan struktur yang jelas dan draf yang rapi.",
+  homeCodePrompt: "Bertindak sebagai arsitek kode. Bantu saya merancang atau menyempurnakan [fitur] menggunakan [bahasa/framework]. Pertimbangkan kebutuhan, keamanan, kemudahan perawatan, dan pengujian.",
+  homeBrainstormPrompt: "Bantu saya melakukan brainstorming ide praktis untuk [tujuan]. Pertimbangkan konteks dan batasan saya, kelompokkan arah terbaik, lalu sarankan langkah berikutnya.",
+  homeResearchPrompt: "Bantu saya menyiapkan rencana riset mendalam tentang [topik]. Tentukan pertanyaan utama, bukti yang diperlukan, jenis sumber tepercaya, kriteria perbandingan, dan struktur laporan yang jelas.",
+  appearanceSection: "Bahasa dan tampilan", appearanceSectionHint: "Pilih bahasa antarmuka serta tema terang atau gelap.",
+  interfaceLanguage: "Bahasa antarmuka", colorTheme: "Tema warna",
+  themeDark: "Gelap", themeLight: "Terang",
+  activateLightTheme: "Ganti ke tema terang", activateDarkTheme: "Ganti ke tema gelap",
+};
+const CORE_UI_KEYS = [
+  "helloPrefix", "welcomeSubtitle", "quickCreateLabel", "quickCreateImage", "quickCreateSlides", "quickCreateDocument",
+  "quickCreateSpreadsheet", "quickPromptImage", "quickPromptSlides", "quickPromptDocument", "quickPromptSpreadsheet",
+  "composerPlaceholderAuto", "composerPlaceholderChat", "composerPlaceholderCoding", "composerPlaceholderFlash",
+  "composerPlaceholderPro", "composerPlaceholderMax", "composerPlaceholderImage", "no_history_text", "tierBadgeAction",
+];
+const CORE_UI_TEXT = Object.fromEntries([
+  ["en", ["Hello! I'm", "Your personal AI assistant. Ask a question to get started.", "Quick create", "Create image", "Create slides", "Create document", "Create spreadsheet", "Create an image of ", "Create a PowerPoint presentation about ", "Create a Word document about ", "Create a spreadsheet with ", "Ask anything…", "What would you like to chat about?", "Describe the coding problem you want to solve…", "Ask a quick question…", "Describe the task you want analyzed…", "Describe the task you want analyzed…", "Describe the image you want to create…", "No recent chats.", "Change"]],
+  ["id", ["Halo! Aku", "Asisten AI pribadimu. Tulis pertanyaan untuk memulai.", "Buat cepat", "Buat gambar", "Buat slide", "Buat dokumen", "Buat spreadsheet", "Buatkan gambar ", "Buatkan presentasi PowerPoint tentang ", "Buatkan dokumen Word tentang ", "Buat file Excel berisi ", "Tanyakan apa saja…", "Mau ngobrol tentang apa?", "Jelaskan masalah coding yang ingin diselesaikan…", "Ajukan pertanyaan singkat…", "Jelaskan tugas yang perlu dianalisis…", "Jelaskan tugas yang perlu dianalisis…", "Deskripsikan gambar yang ingin dibuat…", "Belum ada riwayat chat.", "Ubah"]],
+  ["es", ["¡Hola! Soy", "Tu asistente personal de IA. Haz una pregunta para empezar.", "Crear rápidamente", "Crear imagen", "Crear diapositivas", "Crear documento", "Crear hoja de cálculo", "Crea una imagen de ", "Crea una presentación de PowerPoint sobre ", "Crea un documento de Word sobre ", "Crea una hoja de cálculo con ", "Pregunta lo que quieras…", "¿Sobre qué te gustaría hablar?", "Describe el problema de programación que quieres resolver…", "Haz una pregunta rápida…", "Describe la tarea que quieres analizar…", "Describe la tarea que quieres analizar…", "Describe la imagen que quieres crear…", "Sin historial de chats.", "Cambiar"]],
+  ["fr", ["Bonjour ! Je suis", "Votre assistant IA personnel. Posez une question pour commencer.", "Créer rapidement", "Créer une image", "Créer des diapositives", "Créer un document", "Créer un tableur", "Crée une image de ", "Crée une présentation PowerPoint sur ", "Crée un document Word sur ", "Crée un tableur avec ", "Posez votre question…", "De quoi souhaitez-vous discuter ?", "Décrivez le problème de programmation à résoudre…", "Posez une question rapide…", "Décrivez la tâche à analyser…", "Décrivez la tâche à analyser…", "Décrivez l’image à créer…", "Aucune conversation récente.", "Changer"]],
+  ["de", ["Hallo! Ich bin", "Dein persönlicher KI-Assistent. Stelle eine Frage, um zu beginnen.", "Schnellerstellen", "Bild erstellen", "Folien erstellen", "Dokument erstellen", "Tabelle erstellen", "Erstelle ein Bild von ", "Erstelle eine PowerPoint-Präsentation über ", "Erstelle ein Word-Dokument über ", "Erstelle eine Tabelle mit ", "Frag einfach drauflos…", "Worüber möchtest du sprechen?", "Beschreibe das Coding-Problem, das du lösen möchtest…", "Stelle eine kurze Frage…", "Beschreibe die zu analysierende Aufgabe…", "Beschreibe die zu analysierende Aufgabe…", "Beschreibe das Bild, das du erstellen möchtest…", "Kein Chat-Verlauf.", "Ändern"]],
+  ["pt", ["Olá! Sou", "Seu assistente pessoal de IA. Faça uma pergunta para começar.", "Criar rapidamente", "Criar imagem", "Criar slides", "Criar documento", "Criar planilha", "Crie uma imagem de ", "Crie uma apresentação do PowerPoint sobre ", "Crie um documento do Word sobre ", "Crie uma planilha com ", "Pergunte qualquer coisa…", "Sobre o que você gostaria de conversar?", "Descreva o problema de programação que deseja resolver…", "Faça uma pergunta rápida…", "Descreva a tarefa que deseja analisar…", "Descreva a tarefa que deseja analisar…", "Descreva a imagem que deseja criar…", "Nenhuma conversa recente.", "Alterar"]],
+  ["ja", ["こんにちは、", "MyAIはあなた専用のAIアシスタントです。質問して始めましょう。", "クイック作成", "画像を作成", "スライドを作成", "文書を作成", "表計算シートを作成", "次の画像を作成：", "次のテーマでPowerPointを作成：", "次のテーマでWord文書を作成：", "次の内容で表計算シートを作成：", "何でも聞いてください…", "何について話しましょうか？", "解決したいコーディングの問題を説明してください…", "簡単な質問をどうぞ…", "分析したいタスクを説明してください…", "分析したいタスクを説明してください…", "作成したい画像を説明してください…", "最近のチャットはありません。", "変更"]],
+  ["ko", ["안녕하세요! 저는", "MyAI는 개인 AI 어시스턴트입니다. 질문을 입력해 시작하세요.", "빠른 만들기", "이미지 만들기", "슬라이드 만들기", "문서 만들기", "스프레드시트 만들기", "다음 이미지 만들기: ", "다음 주제로 PowerPoint 프레젠테이션 만들기: ", "다음 주제로 Word 문서 만들기: ", "다음 내용으로 스프레드시트 만들기: ", "무엇이든 물어보세요…", "무엇에 대해 이야기할까요?", "해결하려는 코딩 문제를 설명하세요…", "간단한 질문을 입력하세요…", "분석할 작업을 설명하세요…", "분석할 작업을 설명하세요…", "만들고 싶은 이미지를 설명하세요…", "최근 대화가 없습니다.", "변경"]],
+  ["zh", ["你好！我是", "我是你的专属 AI 助手。提出问题即可开始。", "快速创建", "创建图片", "创建幻灯片", "创建文档", "创建电子表格", "创建一张关于以下内容的图片：", "创建一个关于以下主题的 PowerPoint 演示文稿：", "创建一份关于以下主题的 Word 文档：", "创建一个包含以下内容的电子表格：", "想问什么都可以…", "你想聊些什么？", "描述你想解决的编程问题…", "提出一个简短问题…", "描述你要分析的任务…", "描述你要分析的任务…", "描述你想创建的图片…", "暂无最近的聊天记录。", "更改"]],
+  ["hi", ["नमस्ते! मैं हूँ", "मैं आपका निजी AI सहायक हूँ। शुरू करने के लिए कोई सवाल पूछें।", "त्वरित बनाएँ", "छवि बनाएँ", "स्लाइड बनाएँ", "दस्तावेज़ बनाएँ", "स्प्रेडशीट बनाएँ", "इसकी छवि बनाएँ: ", "इस विषय पर PowerPoint प्रस्तुति बनाएँ: ", "इस विषय पर Word दस्तावेज़ बनाएँ: ", "इस डेटा की स्प्रेडशीट बनाएँ: ", "कुछ भी पूछें…", "आप किस बारे में बात करना चाहेंगे?", "जिस कोडिंग समस्या को हल करना है उसका वर्णन करें…", "एक छोटा सवाल पूछें…", "विश्लेषण किए जाने वाले काम का वर्णन करें…", "विश्लेषण किए जाने वाले काम का वर्णन करें…", "बनाई जाने वाली छवि का वर्णन करें…", "हाल की कोई चैट नहीं है।", "बदलें"]],
+  ["ar", ["مرحبًا! أنا", "أنا مساعدك الشخصي بالذكاء الاصطناعي. اطرح سؤالًا للبدء.", "إنشاء سريع", "إنشاء صورة", "إنشاء شرائح", "إنشاء مستند", "إنشاء جدول بيانات", "أنشئ صورة لـ ", "أنشئ عرض PowerPoint حول ", "أنشئ مستند Word حول ", "أنشئ جدول بيانات يتضمن ", "اسأل عن أي شيء…", "عمّ تود أن نتحدث؟", "صِف مشكلة البرمجة التي تريد حلها…", "اطرح سؤالًا سريعًا…", "صِف المهمة التي تريد تحليلها…", "صِف المهمة التي تريد تحليلها…", "صِف الصورة التي تريد إنشاءها…", "لا توجد محادثات حديثة.", "تغيير"]],
+  ["ru", ["Привет! Я", "Я ваш личный ИИ-ассистент. Задайте вопрос, чтобы начать.", "Быстрое создание", "Создать изображение", "Создать слайды", "Создать документ", "Создать таблицу", "Создай изображение: ", "Создай презентацию PowerPoint на тему: ", "Создай документ Word на тему: ", "Создай таблицу со следующими данными: ", "Спрашивайте о чём угодно…", "О чём поговорим?", "Опишите задачу программирования, которую нужно решить…", "Задайте короткий вопрос…", "Опишите задачу для анализа…", "Опишите задачу для анализа…", "Опишите изображение, которое нужно создать…", "Недавних чатов нет.", "Изменить"]],
+  ["tr", ["Merhaba! Ben", "Kişisel yapay zekâ asistanınım. Başlamak için bir soru sor.", "Hızlı oluştur", "Görsel oluştur", "Slayt oluştur", "Belge oluştur", "Elektronik tablo oluştur", "Şunun görselini oluştur: ", "Şu konuda bir PowerPoint sunumu oluştur: ", "Şu konuda bir Word belgesi oluştur: ", "Şunları içeren bir elektronik tablo oluştur: ", "Aklına geleni sor…", "Ne hakkında sohbet etmek istersin?", "Çözmek istediğin kodlama sorununu açıkla…", "Kısa bir soru sor…", "Analiz edilmesini istediğin görevi açıkla…", "Analiz edilmesini istediğin görevi açıkla…", "Oluşturmak istediğin görseli açıkla…", "Yakın zamanda sohbet yok.", "Değiştir"]],
+  ["vi", ["Xin chào! Tôi là", "Tôi là trợ lý AI cá nhân của bạn. Hãy đặt câu hỏi để bắt đầu.", "Tạo nhanh", "Tạo hình ảnh", "Tạo trang trình bày", "Tạo tài liệu", "Tạo bảng tính", "Tạo hình ảnh về ", "Tạo bài thuyết trình PowerPoint về ", "Tạo tài liệu Word về ", "Tạo bảng tính gồm ", "Hãy hỏi bất cứ điều gì…", "Bạn muốn trò chuyện về điều gì?", "Mô tả vấn đề lập trình bạn muốn giải quyết…", "Đặt câu hỏi nhanh…", "Mô tả tác vụ bạn muốn phân tích…", "Mô tả tác vụ bạn muốn phân tích…", "Mô tả hình ảnh bạn muốn tạo…", "Chưa có cuộc trò chuyện gần đây.", "Đổi"]],
+  ["th", ["สวัสดี! ฉันคือ", "ฉันคือผู้ช่วย AI ส่วนตัวของคุณ ถามคำถามเพื่อเริ่มต้น", "สร้างด่วน", "สร้างรูปภาพ", "สร้างสไลด์", "สร้างเอกสาร", "สร้างสเปรดชีต", "สร้างรูปภาพเกี่ยวกับ ", "สร้างงานนำเสนอ PowerPoint เกี่ยวกับ ", "สร้างเอกสาร Word เกี่ยวกับ ", "สร้างสเปรดชีตที่มี ", "ถามได้ทุกเรื่อง…", "อยากคุยเรื่องอะไรดี?", "อธิบายปัญหาโค้ดที่ต้องการแก้…", "ถามคำถามสั้น ๆ…", "อธิบายงานที่ต้องการวิเคราะห์…", "อธิบายงานที่ต้องการวิเคราะห์…", "อธิบายรูปภาพที่ต้องการสร้าง…", "ยังไม่มีแชตล่าสุด", "เปลี่ยน"]],
+  ["it", ["Ciao! Sono", "Sono il tuo assistente IA personale. Fai una domanda per iniziare.", "Crea rapidamente", "Crea immagine", "Crea presentazione", "Crea documento", "Crea foglio di calcolo", "Crea un’immagine di ", "Crea una presentazione PowerPoint su ", "Crea un documento Word su ", "Crea un foglio di calcolo con ", "Chiedi qualsiasi cosa…", "Di cosa vorresti parlare?", "Descrivi il problema di programmazione da risolvere…", "Fai una domanda veloce…", "Descrivi l’attività da analizzare…", "Descrivi l’attività da analizzare…", "Descrivi l’immagine da creare…", "Nessuna chat recente.", "Cambia"]],
+  ["nl", ["Hallo! Ik ben", "Ik ben je persoonlijke AI-assistent. Stel een vraag om te beginnen.", "Snel maken", "Afbeelding maken", "Dia’s maken", "Document maken", "Spreadsheet maken", "Maak een afbeelding van ", "Maak een PowerPoint-presentatie over ", "Maak een Word-document over ", "Maak een spreadsheet met ", "Vraag maar raak…", "Waarover wil je praten?", "Beschrijf het programmeerprobleem dat je wilt oplossen…", "Stel een korte vraag…", "Beschrijf de taak die je wilt analyseren…", "Beschrijf de taak die je wilt analyseren…", "Beschrijf de afbeelding die je wilt maken…", "Geen recente chats.", "Wijzigen"]],
+].map(([language, values]) => [language, Object.fromEntries(CORE_UI_KEYS.map((key, index) => [key, values[index]]))]));
+const TASK_PROGRESS_TEXT = {
+  en: ["Analyzing request", "Running", "Analysis", "Execution", "Complete", "Task complete", "Stopped"],
+  id: ["Menganalisis permintaan", "Berjalan", "Analisis", "Eksekusi", "Selesai", "Tugas selesai", "Terhenti"],
+  es: ["Analizando la solicitud", "En curso", "Análisis", "Ejecución", "Completado", "Tarea completada", "Detenida"],
+  fr: ["Analyse de la demande", "En cours", "Analyse", "Exécution", "Terminé", "Tâche terminée", "Interrompue"],
+  de: ["Anfrage wird analysiert", "Läuft", "Analyse", "Ausführung", "Fertig", "Aufgabe abgeschlossen", "Gestoppt"],
+  pt: ["Analisando a solicitação", "Em andamento", "Análise", "Execução", "Concluído", "Tarefa concluída", "Interrompida"],
+  ja: ["リクエストを分析中", "実行中", "分析", "実行", "完了", "タスク完了", "停止"],
+  ko: ["요청 분석 중", "진행 중", "분석", "실행", "완료", "작업 완료", "중지됨"],
+  zh: ["正在分析请求", "进行中", "分析", "执行", "完成", "任务完成", "已停止"],
+  hi: ["अनुरोध का विश्लेषण", "जारी है", "विश्लेषण", "निष्पादन", "पूर्ण", "कार्य पूरा हुआ", "रुका हुआ"],
+  ar: ["جارٍ تحليل الطلب", "قيد التنفيذ", "التحليل", "التنفيذ", "مكتمل", "اكتملت المهمة", "متوقف"],
+  ru: ["Анализ запроса", "Выполняется", "Анализ", "Выполнение", "Готово", "Задача завершена", "Остановлено"],
+  tr: ["İstek analiz ediliyor", "Devam ediyor", "Analiz", "Yürütme", "Tamamlandı", "Görev tamamlandı", "Durduruldu"],
+  vi: ["Đang phân tích yêu cầu", "Đang chạy", "Phân tích", "Thực hiện", "Hoàn tất", "Đã hoàn tất tác vụ", "Đã dừng"],
+  th: ["กำลังวิเคราะห์คำขอ", "กำลังดำเนินการ", "วิเคราะห์", "ดำเนินการ", "เสร็จสิ้น", "งานเสร็จสิ้น", "หยุดแล้ว"],
+  it: ["Analisi della richiesta", "In corso", "Analisi", "Esecuzione", "Completato", "Attività completata", "Interrotto"],
+  nl: ["Verzoek analyseren", "Bezig", "Analyse", "Uitvoering", "Voltooid", "Taak voltooid", "Gestopt"],
+};
+const TASK_PROGRESS_KEYS = ["taskProgressAnalysis", "taskProgressRunning", "taskStepAnalysis", "taskStepExecution", "taskStepComplete", "taskProgressComplete", "taskProgressStopped"];
+const TASK_PROGRESS_TRANSLATIONS = Object.fromEntries(Object.entries(TASK_PROGRESS_TEXT).map(([language, values]) => [
+  language,
+  Object.fromEntries(TASK_PROGRESS_KEYS.map((key, index) => [key, values[index]])),
+]));
+const APP_TEXT = Object.fromEntries([
+  ["en", [
+    "Add image", "Add file", "Add folder", "AI provider status", "Search Monid data",
+    "Coding", "Flash", "Pro", "Max",
+    "FREE · basic access; provider charges may apply", "BASIC · quick everyday answers", "PRO · stronger reasoning", "MAX · most capable models",
+    "Search models… (Qwen, Claude, Gemini, DeepSeek)", "FREE", "PREMIUM · CHECK PRICE",
+    "No coding-specific models are available. General models remain available.", "No models match this search or mode.",
+    "AI personalization", "About you", "optional", "Example: I study computer science and like answers with examples.",
+    "Your preferred AI style", "Example: Be friendly, concise, and include simple examples.",
+    "Replies follow your device/browser language. You can ask for another language at any time.",
+    "Manage chat data", "Download all chats (.json)", "Delete all chats", "Reset personalization", "Save",
+  ]],
+  ["id", [
+    "Tambah gambar", "Tambah file", "Tambah folder", "Status provider AI", "Cari data Monid",
+    "Coding", "Flash", "Pro", "Max",
+    "Free · tarif provider Rp0", "Basic · cepat untuk kebutuhan harian", "Pro · penalaran lebih kuat", "Max · model paling mumpuni",
+    "Cari model… (Qwen, Claude, Gemini, DeepSeek)", "GRATIS", "PREMIUM · CEK TARIF",
+    "Belum ada model khusus coding. Model umum tetap tersedia.", "Tidak ada model yang cocok dengan pencarian atau mode ini.",
+    "Personalisasi AI", "Tentang kamu", "opsional", "Contoh: Saya mahasiswa informatika dan suka jawaban dengan contoh.",
+    "Gaya AI yang kamu suka", "Contoh: Jawab ramah, singkat, dan sertakan contoh sederhana.",
+    "Jawaban mengikuti bahasa perangkat/browser. Kamu tetap bisa meminta bahasa lain kapan saja.",
+    "Kelola data chat", "Unduh semua chat (.json)", "Hapus semua chat", "Reset personalisasi", "Simpan",
+  ]],
+  ["es", [
+    "Añadir imagen", "Añadir archivo", "Añadir carpeta", "Estado de proveedores de IA", "Buscar datos de Monid",
+    "Programación", "Rápido", "Pro", "Max",
+    "Free · tarifa del proveedor: cero", "Basic · rápido para tareas diarias", "Pro · razonamiento más sólido", "Max · modelos más capaces",
+    "Buscar modelos… (Qwen, Claude, Gemini, DeepSeek)", "GRATIS", "PREMIUM · CONSULTAR PRECIO",
+    "No hay modelos específicos de programación. Hay modelos generales disponibles.", "Ningún modelo coincide con esta búsqueda o modo.",
+    "Personalización de IA", "Sobre ti", "opcional", "Ejemplo: estudio informática y prefiero respuestas con ejemplos.",
+    "Estilo de IA preferido", "Ejemplo: responde de forma amable y concisa, con ejemplos sencillos.",
+    "Las respuestas siguen el idioma del dispositivo/navegador. Puedes pedir otro idioma cuando quieras.",
+    "Gestionar datos de chat", "Descargar todos los chats (.json)", "Eliminar todos los chats", "Restablecer personalización", "Guardar",
+  ]],
+  ["fr", [
+    "Ajouter une image", "Ajouter un fichier", "Ajouter un dossier", "État des fournisseurs IA", "Rechercher des données Monid",
+    "Programmation", "Rapide", "Pro", "Max",
+    "Free · tarif fournisseur nul", "Basic · rapide pour les tâches courantes", "Pro · raisonnement renforcé", "Max · modèles les plus performants",
+    "Rechercher des modèles… (Qwen, Claude, Gemini, DeepSeek)", "GRATUIT", "PREMIUM · VÉRIFIER LE TARIF",
+    "Aucun modèle dédié au code. Des modèles généraux restent disponibles.", "Aucun modèle ne correspond à cette recherche ou à ce mode.",
+    "Personnalisation de l’IA", "À propos de vous", "facultatif", "Exemple : j’étudie l’informatique et préfère les réponses avec des exemples.",
+    "Style d’IA préféré", "Exemple : réponds avec bienveillance, brièvement et avec des exemples simples.",
+    "Les réponses suivent la langue de l’appareil/du navigateur. Vous pouvez demander une autre langue.",
+    "Gérer les données des chats", "Télécharger tous les chats (.json)", "Supprimer tous les chats", "Réinitialiser la personnalisation", "Enregistrer",
+  ]],
+  ["de", [
+    "Bild hinzufügen", "Datei hinzufügen", "Ordner hinzufügen", "KI-Anbieterstatus", "Monid-Daten suchen",
+    "Programmieren", "Schnell", "Pro", "Max",
+    "Free · Anbieterpreis: null", "Basic · schnell für Alltagsaufgaben", "Pro · stärkeres Schlussfolgern", "Max · leistungsfähigste Modelle",
+    "Modelle suchen… (Qwen, Claude, Gemini, DeepSeek)", "KOSTENLOS", "PREMIUM · PREIS PRÜFEN",
+    "Keine speziellen Coding-Modelle verfügbar. Allgemeine Modelle bleiben verfügbar.", "Keine Modelle für diese Suche oder diesen Modus gefunden.",
+    "KI-Personalisierung", "Über dich", "optional", "Beispiel: Ich studiere Informatik und mag Antworten mit Beispielen.",
+    "Bevorzugter KI-Stil", "Beispiel: Antworte freundlich und knapp mit einfachen Beispielen.",
+    "Antworten richten sich nach der Geräte-/Browsersprache. Du kannst jederzeit eine andere Sprache anfordern.",
+    "Chatdaten verwalten", "Alle Chats herunterladen (.json)", "Alle Chats löschen", "Personalisierung zurücksetzen", "Speichern",
+  ]],
+  ["pt", [
+    "Adicionar imagem", "Adicionar arquivo", "Adicionar pasta", "Status dos provedores de IA", "Buscar dados Monid",
+    "Programação", "Rápido", "Pro", "Max",
+    "Free · tarifa do provedor: zero", "Basic · rápido para tarefas do dia a dia", "Pro · raciocínio mais avançado", "Max · modelos mais capazes",
+    "Buscar modelos… (Qwen, Claude, Gemini, DeepSeek)", "GRÁTIS", "PREMIUM · VER TARIFA",
+    "Não há modelos específicos de programação. Modelos gerais continuam disponíveis.", "Nenhum modelo corresponde a esta busca ou modo.",
+    "Personalização da IA", "Sobre você", "opcional", "Exemplo: estudo computação e gosto de respostas com exemplos.",
+    "Estilo de IA preferido", "Exemplo: responda de forma amigável, breve e com exemplos simples.",
+    "As respostas seguem o idioma do dispositivo/navegador. Você pode pedir outro idioma a qualquer momento.",
+    "Gerenciar dados do chat", "Baixar todos os chats (.json)", "Excluir todos os chats", "Redefinir personalização", "Salvar",
+  ]],
+  ["ja", [
+    "画像を追加", "ファイルを追加", "フォルダーを追加", "AIプロバイダーの状態", "Monidデータを検索",
+    "コーディング", "高速", "Pro", "Max",
+    "Free · プロバイダー料金ゼロ", "Basic · 日常の質問に素早く回答", "Pro · より高度な推論", "Max · 最も高性能なモデル",
+    "モデルを検索… (Qwen、Claude、Gemini、DeepSeek)", "無料", "プレミアム · 料金を確認",
+    "コーディング専用モデルはありません。一般モデルを利用できます。", "検索またはモードに一致するモデルはありません。",
+    "AIのパーソナライズ", "あなたについて", "任意", "例：情報科学を学んでいて、例を含む回答が好きです。",
+    "好みのAIスタイル", "例：親しみやすく簡潔に、簡単な例を添えて回答してください。",
+    "回答は端末/ブラウザーの言語に従います。いつでも別の言語を指定できます。",
+    "チャットデータを管理", "すべてのチャットをダウンロード (.json)", "すべてのチャットを削除", "パーソナライズをリセット", "保存",
+  ]],
+  ["ko", [
+    "이미지 추가", "파일 추가", "폴더 추가", "AI 제공자 상태", "Monid 데이터 검색",
+    "코딩", "빠른 응답", "Pro", "Max",
+    "Free · 제공자 요금 0원", "Basic · 일상 작업에 빠른 응답", "Pro · 더 강력한 추론", "Max · 가장 뛰어난 모델",
+    "모델 검색… (Qwen, Claude, Gemini, DeepSeek)", "무료", "프리미엄 · 요금 확인",
+    "코딩 전용 모델이 없습니다. 일반 모델을 사용할 수 있습니다.", "검색어나 모드에 맞는 모델이 없습니다.",
+    "AI 개인 설정", "내 정보", "선택 사항", "예: 컴퓨터 과학을 공부하며 예시가 포함된 답변을 선호합니다.",
+    "선호하는 AI 스타일", "예: 친절하고 간결하게, 쉬운 예시를 포함해 답변하세요.",
+    "답변은 기기/브라우저 언어를 따릅니다. 언제든 다른 언어를 요청할 수 있습니다.",
+    "채팅 데이터 관리", "모든 채팅 다운로드 (.json)", "모든 채팅 삭제", "개인 설정 초기화", "저장",
+  ]],
+  ["zh", [
+    "添加图片", "添加文件", "添加文件夹", "AI 提供商状态", "搜索 Monid 数据",
+    "编程", "快速", "Pro", "Max",
+    "Free · 提供商费率为零", "Basic · 日常任务响应快", "Pro · 推理能力更强", "Max · 能力最强的模型",
+    "搜索模型… (Qwen、Claude、Gemini、DeepSeek)", "免费", "高级 · 查看价格",
+    "暂无专用编程模型，可使用通用模型。", "没有符合此搜索或模式的模型。",
+    "AI 个性化", "关于你", "可选", "例如：我学习计算机科学，喜欢带示例的回答。",
+    "偏好的 AI 风格", "例如：友好、简洁地回答，并提供简单示例。",
+    "回复会遵循设备/浏览器语言。你也可以随时指定其他语言。",
+    "管理聊天数据", "下载所有聊天 (.json)", "删除所有聊天", "重置个性化设置", "保存",
+  ]],
+  ["hi", [
+    "छवि जोड़ें", "फ़ाइल जोड़ें", "फ़ोल्डर जोड़ें", "AI प्रदाता स्थिति", "Monid डेटा खोजें",
+    "कोडिंग", "तेज़", "Pro", "Max",
+    "Free · प्रदाता शुल्क शून्य", "Basic · रोज़मर्रा के कामों के लिए तेज़", "Pro · बेहतर तर्क क्षमता", "Max · सबसे सक्षम मॉडल",
+    "मॉडल खोजें… (Qwen, Claude, Gemini, DeepSeek)", "मुफ़्त", "प्रीमियम · कीमत देखें",
+    "कोडिंग-विशिष्ट मॉडल उपलब्ध नहीं हैं। सामान्य मॉडल उपलब्ध हैं।", "इस खोज या मोड से मेल खाता मॉडल नहीं मिला।",
+    "AI वैयक्तिकरण", "आपके बारे में", "वैकल्पिक", "उदाहरण: मैं कंप्यूटर विज्ञान का छात्र हूँ और उदाहरण वाले उत्तर पसंद करता हूँ।",
+    "पसंदीदा AI शैली", "उदाहरण: सरल उदाहरणों के साथ मित्रवत और संक्षिप्त उत्तर दें।",
+    "जवाब डिवाइस/ब्राउज़र की भाषा में होंगे। आप कभी भी दूसरी भाषा माँग सकते हैं।",
+    "चैट डेटा प्रबंधित करें", "सभी चैट डाउनलोड करें (.json)", "सभी चैट हटाएँ", "वैयक्तिकरण रीसेट करें", "सहेजें",
+  ]],
+  ["ar", [
+    "إضافة صورة", "إضافة ملف", "إضافة مجلد", "حالة مزوّدي الذكاء الاصطناعي", "البحث عن بيانات Monid",
+    "البرمجة", "سريع", "Pro", "Max",
+    "Free · سعر المزوّد صفر", "Basic · سريع للمهام اليومية", "Pro · استدلال أقوى", "Max · أكثر النماذج قدرة",
+    "ابحث عن النماذج… (Qwen، Claude، Gemini، DeepSeek)", "مجاني", "مميز · تحقّق من السعر",
+    "لا تتوفر نماذج مخصصة للبرمجة. النماذج العامة متاحة.", "لا توجد نماذج تطابق البحث أو الوضع.",
+    "تخصيص الذكاء الاصطناعي", "معلومات عنك", "اختياري", "مثال: أدرس علوم الحاسوب وأفضّل الإجابات التي تتضمن أمثلة.",
+    "أسلوب الذكاء الاصطناعي المفضل", "مثال: أجب بلطف واختصار مع أمثلة بسيطة.",
+    "تتبع الردود لغة الجهاز/المتصفح. يمكنك طلب لغة أخرى في أي وقت.",
+    "إدارة بيانات المحادثات", "تنزيل كل المحادثات (.json)", "حذف كل المحادثات", "إعادة ضبط التخصيص", "حفظ",
+  ]],
+  ["ru", [
+    "Добавить изображение", "Добавить файл", "Добавить папку", "Статус ИИ-провайдеров", "Поиск данных Monid",
+    "Программирование", "Быстрый", "Pro", "Max",
+    "Free · тариф провайдера — ноль", "Basic · быстро для повседневных задач", "Pro · более сильное рассуждение", "Max · самые мощные модели",
+    "Поиск моделей… (Qwen, Claude, Gemini, DeepSeek)", "БЕСПЛАТНО", "ПРЕМИУМ · ПРОВЕРЬТЕ ЦЕНУ",
+    "Специализированных моделей для кода нет. Доступны общие модели.", "Нет моделей для этого поиска или режима.",
+    "Персонализация ИИ", "О вас", "необязательно", "Пример: я изучаю информатику и люблю ответы с примерами.",
+    "Предпочитаемый стиль ИИ", "Пример: отвечай дружелюбно и кратко, добавляя простые примеры.",
+    "Ответы используют язык устройства/браузера. В любой момент можно запросить другой язык.",
+    "Управление данными чатов", "Скачать все чаты (.json)", "Удалить все чаты", "Сбросить персонализацию", "Сохранить",
+  ]],
+  ["tr", [
+    "Görsel ekle", "Dosya ekle", "Klasör ekle", "Yapay zekâ sağlayıcı durumu", "Monid verilerini ara",
+    "Kodlama", "Hızlı", "Pro", "Max",
+    "Free · sağlayıcı ücreti sıfır", "Basic · günlük işler için hızlı", "Pro · daha güçlü akıl yürütme", "Max · en yetenekli modeller",
+    "Modelleri ara… (Qwen, Claude, Gemini, DeepSeek)", "ÜCRETSİZ", "PREMIUM · FİYATI KONTROL ET",
+    "Kodlama için özel model yok. Genel modeller kullanılabilir.", "Bu arama veya mod için model bulunamadı.",
+    "Yapay zekâ kişiselleştirme", "Hakkında", "isteğe bağlı", "Örnek: bilgisayar bilimi okuyorum ve örnekli yanıtları seviyorum.",
+    "Tercih ettiğin yapay zekâ stili", "Örnek: samimi ve kısa yanıt ver, basit örnekler ekle.",
+    "Yanıtlar cihaz/tarayıcı dilini izler. İstediğin zaman başka bir dil isteyebilirsin.",
+    "Sohbet verilerini yönet", "Tüm sohbetleri indir (.json)", "Tüm sohbetleri sil", "Kişiselleştirmeyi sıfırla", "Kaydet",
+  ]],
+  ["vi", [
+    "Thêm ảnh", "Thêm tệp", "Thêm thư mục", "Trạng thái nhà cung cấp AI", "Tìm dữ liệu Monid",
+    "Lập trình", "Nhanh", "Pro", "Max",
+    "Free · giá nhà cung cấp bằng 0", "Basic · nhanh cho việc hằng ngày", "Pro · suy luận tốt hơn", "Max · mô hình mạnh nhất",
+    "Tìm mô hình… (Qwen, Claude, Gemini, DeepSeek)", "MIỄN PHÍ", "CAO CẤP · KIỂM TRA GIÁ",
+    "Chưa có mô hình chuyên lập trình. Mô hình tổng quát vẫn khả dụng.", "Không có mô hình phù hợp với tìm kiếm hoặc chế độ này.",
+    "Cá nhân hóa AI", "Thông tin về bạn", "không bắt buộc", "Ví dụ: tôi học khoa học máy tính và thích câu trả lời có ví dụ.",
+    "Phong cách AI bạn thích", "Ví dụ: trả lời thân thiện, ngắn gọn và có ví dụ đơn giản.",
+    "Câu trả lời theo ngôn ngữ thiết bị/trình duyệt. Bạn có thể yêu cầu ngôn ngữ khác bất cứ lúc nào.",
+    "Quản lý dữ liệu trò chuyện", "Tải xuống tất cả cuộc trò chuyện (.json)", "Xóa tất cả cuộc trò chuyện", "Đặt lại cá nhân hóa", "Lưu",
+  ]],
+  ["th", [
+    "เพิ่มรูปภาพ", "เพิ่มไฟล์", "เพิ่มโฟลเดอร์", "สถานะผู้ให้บริการ AI", "ค้นหาข้อมูล Monid",
+    "เขียนโค้ด", "รวดเร็ว", "Pro", "Max",
+    "Free · ราคา ผู้ให้บริการเป็นศูนย์", "Basic · ตอบเร็วสำหรับงานทั่วไป", "Pro · ให้เหตุผลได้ดีขึ้น", "Max · โมเดลที่มีความสามารถสูงสุด",
+    "ค้นหาโมเดล… (Qwen, Claude, Gemini, DeepSeek)", "ฟรี", "พรีเมียม · ตรวจสอบราคา",
+    "ไม่มีโมเดลเขียนโค้ดโดยเฉพาะ แต่ยังใช้โมเดลทั่วไปได้", "ไม่พบโมเดลที่ตรงกับการค้นหาหรือโหมดนี้",
+    "ปรับแต่ง AI", "เกี่ยวกับคุณ", "ไม่บังคับ", "ตัวอย่าง: ฉันเรียนวิทยาการคอมพิวเตอร์และชอบคำตอบที่มีตัวอย่าง",
+    "รูปแบบ AI ที่คุณชอบ", "ตัวอย่าง: ตอบอย่างเป็นมิตร กระชับ และยกตัวอย่างง่าย ๆ",
+    "คำตอบจะใช้ภาษาของอุปกรณ์/เบราว์เซอร์ คุณสามารถขอภาษาอื่นได้ทุกเมื่อ",
+    "จัดการข้อมูลแชต", "ดาวน์โหลดแชตทั้งหมด (.json)", "ลบแชตทั้งหมด", "รีเซ็ตการปรับแต่ง", "บันทึก",
+  ]],
+  ["it", [
+    "Aggiungi immagine", "Aggiungi file", "Aggiungi cartella", "Stato dei provider IA", "Cerca dati Monid",
+    "Programmazione", "Veloce", "Pro", "Max",
+    "Free · tariffa del provider pari a zero", "Basic · rapido per le attività quotidiane", "Pro · ragionamento più avanzato", "Max · modelli più potenti",
+    "Cerca modelli… (Qwen, Claude, Gemini, DeepSeek)", "GRATIS", "PREMIUM · VERIFICA IL PREZZO",
+    "Nessun modello specifico per il codice. Sono disponibili modelli generali.", "Nessun modello corrisponde alla ricerca o alla modalità.",
+    "Personalizzazione IA", "Informazioni su di te", "facoltativo", "Esempio: studio informatica e preferisco risposte con esempi.",
+    "Stile IA preferito", "Esempio: rispondi in modo amichevole e conciso, con esempi semplici.",
+    "Le risposte seguono la lingua del dispositivo/browser. Puoi chiedere un’altra lingua in qualsiasi momento.",
+    "Gestisci i dati delle chat", "Scarica tutte le chat (.json)", "Elimina tutte le chat", "Reimposta personalizzazione", "Salva",
+  ]],
+  ["nl", [
+    "Afbeelding toevoegen", "Bestand toevoegen", "Map toevoegen", "Status AI-providers", "Monid-gegevens zoeken",
+    "Programmeren", "Snel", "Pro", "Max",
+    "Free · providertarief is nul", "Basic · snel voor dagelijkse taken", "Pro · sterker redeneervermogen", "Max · meest capabele modellen",
+    "Modellen zoeken… (Qwen, Claude, Gemini, DeepSeek)", "GRATIS", "PREMIUM · PRIJS CONTROLEREN",
+    "Geen speciale programmeermodellen beschikbaar. Algemene modellen blijven beschikbaar.", "Geen modellen gevonden voor deze zoekopdracht of modus.",
+    "AI-personalisatie", "Over jou", "optioneel", "Voorbeeld: ik studeer informatica en houd van antwoorden met voorbeelden.",
+    "Voorkeursstijl voor AI", "Voorbeeld: antwoord vriendelijk en beknopt, met eenvoudige voorbeelden.",
+    "Antwoorden volgen de taal van je apparaat/browser. Je kunt altijd een andere taal vragen.",
+    "Chatgegevens beheren", "Alle chats downloaden (.json)", "Alle chats verwijderen", "Personalisatie resetten", "Opslaan",
+  ]],
+].map(([language, values]) => [language, Object.fromEntries(APP_TEXT_KEYS.map((key, index) => [key, values[index]]))]));
+const EXTRA_APP_TEXT_KEYS = [
+  "apiKeyTitle", "apiKeyDescription", "provider", "apiKeyLabel", "pasteApiKey", "removeKey", "saveToAccount",
+  "apiKeyWarning", "monidTitle", "monidDescription", "searchData", "searchEndpoint", "runEndpoint",
+  "premiumConfirmTitle", "premiumConfirmWarning", "cancel", "continueAction",
+];
+const EXTRA_APP_TEXT = Object.fromEntries([
+  ["en", [
+    "Personal API key", "Keys are saved to your account and used directly by your browser. Anyone with access to your account session can use them; provider quotas or charges may apply.",
+    "Provider", "API key", "Paste API key", "Remove key", "Save to account",
+    "Personal keys may access paid models. Restrict their domains and quotas in the provider dashboard; use Cloudflare Worker secrets for shared websites.",
+    "Search data with Monid", "Find a Monid data endpoint, review its schema and price, and run it only after approval. Usage may reduce your Monid balance.",
+    "What data do you want to find?", "Search endpoints", "Run endpoint (may cost money)",
+    "Usage confirmation", "Provider prices and quotas apply. Check the provider's pricing before continuing.", "Cancel", "Continue",
+  ]],
+  ["id", [
+    "API key pribadi", "Key disimpan di akun dan digunakan langsung dari browser. Siapa pun yang dapat mengakses sesi akun dapat memakainya; kuota atau biaya provider dapat berlaku.",
+    "Provider", "API key", "Tempel API key", "Hapus key", "Simpan ke akun",
+    "Key pribadi dapat memakai model berbayar. Batasi domain dan kuota di dashboard provider; gunakan secret Cloudflare Worker untuk situs bersama.",
+    "Cari data dengan Monid", "Temukan endpoint data Monid, periksa skema dan harganya, lalu jalankan hanya setelah disetujui. Pemakaian dapat mengurangi saldo Monid.",
+    "Data apa yang ingin dicari?", "Cari endpoint", "Jalankan endpoint (mungkin berbayar)",
+    "Konfirmasi penggunaan", "Biaya dan kuota mengikuti provider. Periksa tarif provider sebelum melanjutkan.", "Batal", "Lanjutkan",
+  ]],
+  ["es", [
+    "Clave API personal", "Las claves se guardan en tu cuenta y el navegador las usa directamente. Quien acceda a tu sesión también puede usarlas; pueden aplicarse cuotas o cargos.",
+    "Proveedor", "Clave API", "Pegar clave API", "Eliminar clave", "Guardar en la cuenta",
+    "Las claves personales pueden acceder a modelos de pago. Limita dominios y cuotas en el panel del proveedor; usa secretos de Cloudflare Worker en sitios compartidos.",
+    "Buscar datos con Monid", "Busca un endpoint de datos Monid, revisa su esquema y precio y ejecútalo solo tras aprobarlo. El uso puede reducir tu saldo Monid.",
+    "¿Qué datos quieres buscar?", "Buscar endpoints", "Ejecutar endpoint (puede tener costo)",
+    "Confirmación de uso", "Se aplican los precios y cuotas del proveedor. Comprueba el precio antes de continuar.", "Cancelar", "Continuar",
+  ]],
+  ["fr", [
+    "Clé API personnelle", "Les clés sont enregistrées dans votre compte et utilisées directement par le navigateur. Toute personne accédant à votre session peut les utiliser ; des quotas ou frais peuvent s’appliquer.",
+    "Fournisseur", "Clé API", "Coller la clé API", "Supprimer la clé", "Enregistrer dans le compte",
+    "Les clés personnelles peuvent accéder à des modèles payants. Limitez leurs domaines et quotas dans le tableau de bord du fournisseur ; utilisez les secrets Cloudflare Worker pour les sites partagés.",
+    "Rechercher des données avec Monid", "Trouvez un endpoint Monid, vérifiez son schéma et son prix, puis lancez-le uniquement après approbation. L’utilisation peut réduire votre solde Monid.",
+    "Quelles données recherchez-vous ?", "Rechercher des endpoints", "Exécuter l’endpoint (peut être payant)",
+    "Confirmation d’utilisation", "Les prix et quotas du fournisseur s’appliquent. Vérifiez le tarif avant de continuer.", "Annuler", "Continuer",
+  ]],
+  ["de", [
+    "Persönlicher API-Schlüssel", "Schlüssel werden in deinem Konto gespeichert und direkt vom Browser verwendet. Jeder mit Zugriff auf deine Sitzung kann sie nutzen; Kontingente oder Gebühren können anfallen.",
+    "Anbieter", "API-Schlüssel", "API-Schlüssel einfügen", "Schlüssel entfernen", "Im Konto speichern",
+    "Persönliche Schlüssel können kostenpflichtige Modelle verwenden. Beschränke Domains und Kontingente im Anbieter-Dashboard; nutze Cloudflare-Worker-Secrets für gemeinsam genutzte Websites.",
+    "Daten mit Monid suchen", "Finde einen Monid-Datenendpunkt, prüfe Schema und Preis und führe ihn nur nach Zustimmung aus. Die Nutzung kann dein Monid-Guthaben reduzieren.",
+    "Welche Daten möchtest du suchen?", "Endpunkte suchen", "Endpunkt ausführen (kann kostenpflichtig sein)",
+    "Nutzung bestätigen", "Es gelten die Preise und Kontingente des Anbieters. Prüfe den Preis vor dem Fortfahren.", "Abbrechen", "Weiter",
+  ]],
+  ["pt", [
+    "Chave de API pessoal", "As chaves são salvas na sua conta e usadas diretamente pelo navegador. Quem acessar sua sessão também poderá usá-las; limites ou cobranças podem ser aplicados.",
+    "Provedor", "Chave de API", "Cole a chave de API", "Remover chave", "Salvar na conta",
+    "Chaves pessoais podem acessar modelos pagos. Restrinja domínios e limites no painel do provedor; use secrets do Cloudflare Worker em sites compartilhados.",
+    "Buscar dados com Monid", "Encontre um endpoint Monid, confira o esquema e o preço e execute somente após aprovar. O uso pode reduzir seu saldo Monid.",
+    "Quais dados deseja buscar?", "Buscar endpoints", "Executar endpoint (pode ter custo)",
+    "Confirmação de uso", "Os preços e limites do provedor se aplicam. Confira o preço antes de continuar.", "Cancelar", "Continuar",
+  ]],
+  ["ja", [
+    "個人用APIキー", "キーはアカウントに保存され、ブラウザーから直接使用されます。アカウントセッションにアクセスできる人はキーを使えるため、利用上限や料金に注意してください。",
+    "プロバイダー", "APIキー", "APIキーを貼り付け", "キーを削除", "アカウントに保存",
+    "個人用キーでは有料モデルを利用できます。プロバイダーのダッシュボードでドメインと上限を設定し、共有サイトではCloudflare Workerシークレットを使用してください。",
+    "Monidでデータを検索", "Monidのデータエンドポイントを探し、スキーマと料金を確認してから実行してください。利用によりMonid残高が減る場合があります。",
+    "検索するデータは何ですか？", "エンドポイントを検索", "エンドポイントを実行（有料の場合あり）",
+    "利用の確認", "プロバイダーの料金と上限が適用されます。続行する前に料金を確認してください。", "キャンセル", "続行",
+  ]],
+  ["ko", [
+    "개인 API 키", "키는 계정에 저장되며 브라우저에서 직접 사용됩니다. 계정 세션에 접근할 수 있는 사람은 키를 사용할 수 있으므로 제공자 한도나 요금에 유의하세요.",
+    "제공자", "API 키", "API 키 붙여넣기", "키 삭제", "계정에 저장",
+    "개인 키로 유료 모델을 사용할 수 있습니다. 제공자 대시보드에서 도메인과 한도를 제한하고, 공유 사이트에는 Cloudflare Worker secret을 사용하세요.",
+    "Monid 데이터 검색", "Monid 데이터 엔드포인트를 찾고 스키마와 가격을 확인한 뒤 승인 후 실행하세요. 사용하면 Monid 잔액이 줄어들 수 있습니다.",
+    "어떤 데이터를 찾을까요?", "엔드포인트 검색", "엔드포인트 실행 (유료일 수 있음)",
+    "사용 확인", "제공자 가격과 한도가 적용됩니다. 계속하기 전에 가격을 확인하세요.", "취소", "계속",
+  ]],
+  ["zh", [
+    "个人 API 密钥", "密钥保存在你的账户中，并由浏览器直接使用。任何能访问账户会话的人都可以使用它；可能受到提供商额度或费用限制。",
+    "提供商", "API 密钥", "粘贴 API 密钥", "删除密钥", "保存到账户",
+    "个人密钥可能访问付费模型。请在提供商控制台限制域名和额度；共享网站请使用 Cloudflare Worker 密钥。",
+    "使用 Monid 搜索数据", "查找 Monid 数据端点，检查其架构和价格，并仅在批准后运行。使用可能会减少 Monid 余额。",
+    "你想查找什么数据？", "搜索端点", "运行端点（可能收费）",
+    "确认使用", "费用和额度由提供商决定。继续前请检查价格。", "取消", "继续",
+  ]],
+  ["hi", [
+    "व्यक्तिगत API कुंजी", "कुंजियाँ आपके खाते में सहेजी जाती हैं और ब्राउज़र से सीधे उपयोग होती हैं। आपके खाते के सत्र तक पहुँच रखने वाला कोई भी व्यक्ति उनका उपयोग कर सकता है; शुल्क या सीमाएँ लागू हो सकती हैं।",
+    "प्रदाता", "API कुंजी", "API कुंजी पेस्ट करें", "कुंजी हटाएँ", "खाते में सहेजें",
+    "व्यक्तिगत कुंजियाँ सशुल्क मॉडल तक पहुँच सकती हैं। प्रदाता डैशबोर्ड में डोमेन और सीमाएँ तय करें; साझा साइटों के लिए Cloudflare Worker secrets का उपयोग करें।",
+    "Monid से डेटा खोजें", "Monid डेटा endpoint खोजें, उसका schema और कीमत देखें, फिर स्वीकृति के बाद ही चलाएँ। उपयोग से Monid बैलेंस घट सकता है।",
+    "आप कौन-सा डेटा खोजना चाहते हैं?", "Endpoints खोजें", "Endpoint चलाएँ (शुल्क लग सकता है)",
+    "उपयोग की पुष्टि", "प्रदाता की कीमतें और सीमाएँ लागू होंगी। आगे बढ़ने से पहले कीमत जाँचें।", "रद्द करें", "जारी रखें",
+  ]],
+  ["ar", [
+    "مفتاح API شخصي", "تُحفظ المفاتيح في حسابك ويستخدمها المتصفح مباشرة. يمكن لأي شخص يصل إلى جلسة حسابك استخدامها؛ وقد تُطبّق حدود أو رسوم المزوّد.",
+    "المزوّد", "مفتاح API", "الصق مفتاح API", "إزالة المفتاح", "حفظ في الحساب",
+    "قد تتيح المفاتيح الشخصية نماذج مدفوعة. قيّد النطاقات والحصص في لوحة المزوّد، واستخدم أسرار Cloudflare Worker للمواقع المشتركة.",
+    "البحث عن بيانات باستخدام Monid", "ابحث عن نقطة بيانات Monid، وراجع مخططها وسعرها، ثم شغّلها بعد الموافقة فقط. قد يقلل الاستخدام رصيد Monid.",
+    "ما البيانات التي تريد البحث عنها؟", "البحث عن نقاط النهاية", "تشغيل نقطة النهاية (قد يكون مدفوعًا)",
+    "تأكيد الاستخدام", "تُطبق أسعار وحدود المزوّد. تحقّق من السعر قبل المتابعة.", "إلغاء", "متابعة",
+  ]],
+  ["ru", [
+    "Личный API-ключ", "Ключи сохраняются в аккаунте и используются браузером напрямую. Любой с доступом к сессии аккаунта может их использовать; возможны лимиты и списания.",
+    "Провайдер", "API-ключ", "Вставьте API-ключ", "Удалить ключ", "Сохранить в аккаунте",
+    "Личные ключи могут открывать платные модели. Ограничьте домены и квоты в панели провайдера; для общих сайтов используйте секреты Cloudflare Worker.",
+    "Поиск данных через Monid", "Найдите конечную точку Monid, проверьте схему и цену и запускайте только после подтверждения. Использование может уменьшить баланс Monid.",
+    "Какие данные нужно найти?", "Поиск конечных точек", "Запустить конечную точку (возможно платно)",
+    "Подтверждение использования", "Действуют цены и квоты провайдера. Проверьте цену перед продолжением.", "Отмена", "Продолжить",
+  ]],
+  ["tr", [
+    "Kişisel API anahtarı", "Anahtarlar hesabınıza kaydedilir ve tarayıcı tarafından doğrudan kullanılır. Hesap oturumunuza erişen herkes anahtarları kullanabilir; kota veya ücret uygulanabilir.",
+    "Sağlayıcı", "API anahtarı", "API anahtarını yapıştır", "Anahtarı kaldır", "Hesaba kaydet",
+    "Kişisel anahtarlar ücretli modellere erişebilir. Sağlayıcı panelinde alan adlarını ve kotaları sınırlandırın; ortak siteler için Cloudflare Worker secret kullanın.",
+    "Monid ile veri ara", "Bir Monid veri uç noktası bulun, şemasını ve fiyatını inceleyin, yalnızca onayladıktan sonra çalıştırın. Kullanım Monid bakiyenizi azaltabilir.",
+    "Hangi veriyi aramak istiyorsunuz?", "Uç noktaları ara", "Uç noktayı çalıştır (ücretli olabilir)",
+    "Kullanım onayı", "Sağlayıcı fiyatları ve kotaları geçerlidir. Devam etmeden önce fiyatı kontrol edin.", "İptal", "Devam et",
+  ]],
+  ["vi", [
+    "Khóa API cá nhân", "Khóa được lưu trong tài khoản và trình duyệt sử dụng trực tiếp. Bất kỳ ai truy cập phiên tài khoản đều có thể dùng khóa; giới hạn hoặc phí của nhà cung cấp có thể áp dụng.",
+    "Nhà cung cấp", "Khóa API", "Dán khóa API", "Xóa khóa", "Lưu vào tài khoản",
+    "Khóa cá nhân có thể truy cập mô hình trả phí. Hãy giới hạn miền và hạn mức trong bảng điều khiển nhà cung cấp; dùng secret Cloudflare Worker cho trang web dùng chung.",
+    "Tìm dữ liệu bằng Monid", "Tìm endpoint dữ liệu Monid, kiểm tra lược đồ và giá rồi chỉ chạy sau khi bạn đồng ý. Việc sử dụng có thể làm giảm số dư Monid.",
+    "Bạn muốn tìm dữ liệu gì?", "Tìm endpoint", "Chạy endpoint (có thể mất phí)",
+    "Xác nhận sử dụng", "Áp dụng giá và hạn mức của nhà cung cấp. Kiểm tra giá trước khi tiếp tục.", "Hủy", "Tiếp tục",
+  ]],
+  ["th", [
+    "API key ส่วนตัว", "คีย์จะบันทึกในบัญชีและเบราว์เซอร์ใช้งานโดยตรง ผู้ที่เข้าถึงเซสชันบัญชีสามารถใช้คีย์ได้ และอาจมีโควตาหรือค่าใช้จ่าย",
+    "ผู้ให้บริการ", "API key", "วาง API key", "ลบคีย์", "บันทึกลงบัญชี",
+    "คีย์ส่วนตัวอาจใช้โมเดลแบบมีค่าใช้จ่าย จำกัดโดเมนและโควตาในแดชบอร์ดผู้ให้บริการ และใช้ Cloudflare Worker secret สำหรับเว็บไซต์ที่ใช้ร่วมกัน",
+    "ค้นหาข้อมูลด้วย Monid", "ค้นหา endpoint ข้อมูล Monid ตรวจสอบ schema และราคา แล้วเรียกใช้หลังอนุมัติเท่านั้น การใช้งานอาจลดยอดคงเหลือ Monid",
+    "ต้องการค้นหาข้อมูลอะไร?", "ค้นหา endpoint", "เรียกใช้ endpoint (อาจมีค่าใช้จ่าย)",
+    "ยืนยันการใช้งาน", "ใช้ราคาและโควตาของผู้ให้บริการ ตรวจสอบราคาก่อนดำเนินการต่อ", "ยกเลิก", "ดำเนินการต่อ",
+  ]],
+  ["it", [
+    "Chiave API personale", "Le chiavi sono salvate nel tuo account e usate direttamente dal browser. Chiunque acceda alla sessione può usarle; possono applicarsi quote o costi del provider.",
+    "Provider", "Chiave API", "Incolla la chiave API", "Rimuovi chiave", "Salva nell’account",
+    "Le chiavi personali possono accedere a modelli a pagamento. Limita domini e quote nella dashboard del provider; usa i secret Cloudflare Worker per i siti condivisi.",
+    "Cerca dati con Monid", "Trova un endpoint dati Monid, controlla schema e prezzo ed eseguilo solo dopo l’approvazione. L’uso può ridurre il saldo Monid.",
+    "Quali dati vuoi cercare?", "Cerca endpoint", "Esegui endpoint (potrebbe essere a pagamento)",
+    "Conferma utilizzo", "Si applicano prezzi e quote del provider. Controlla il prezzo prima di continuare.", "Annulla", "Continua",
+  ]],
+  ["nl", [
+    "Persoonlijke API-sleutel", "Sleutels worden in je account opgeslagen en rechtstreeks door de browser gebruikt. Iedereen met toegang tot je accountsessie kan ze gebruiken; providerquota of kosten kunnen gelden.",
+    "Provider", "API-sleutel", "API-sleutel plakken", "Sleutel verwijderen", "Opslaan in account",
+    "Persoonlijke sleutels kunnen betaalde modellen gebruiken. Beperk domeinen en quota in het providerdashboard; gebruik Cloudflare Worker-secrets voor gedeelde websites.",
+    "Gegevens zoeken met Monid", "Zoek een Monid-data-endpoint, controleer schema en prijs en voer het pas na goedkeuring uit. Gebruik kan je Monid-saldo verlagen.",
+    "Welke gegevens wil je zoeken?", "Endpoints zoeken", "Endpoint uitvoeren (kan geld kosten)",
+    "Gebruik bevestigen", "Providerprijzen en quota zijn van toepassing. Controleer de prijs voordat je doorgaat.", "Annuleren", "Doorgaan",
+  ]],
+].map(([language, values]) => [language, Object.fromEntries(EXTRA_APP_TEXT_KEYS.map((key, index) => [key, values[index]]))]));
+
+function normalizeLanguage(language) {
+  return Object.hasOwn(LANGUAGE_NAMES, language) ? language : "en";
+}
+
+export function translateText(key, language = activeLanguage) {
+  const selected = normalizeLanguage(language);
+  return APP_TEXT[selected]?.[key]
+    || EXTRA_APP_TEXT[selected]?.[key]
+    || TIER_UI_TRANSLATIONS[selected]?.[key]
+    || TASK_PROGRESS_TRANSLATIONS[selected]?.[key]
+    || CORE_UI_TEXT[selected]?.[key]
+    || TRANSLATIONS[selected]?.[key]
+    || (selected === "id" ? INDONESIAN_TEXT[key] : undefined)
+    || ENGLISH_TEXT[key]
+    || CORE_UI_TEXT.en?.[key];
+}
+
+export function translateDynamicText(key, language = activeLanguage) {
+  const selected = normalizeLanguage(language);
+  return DYNAMIC_TRANSLATIONS[key]?.[selected];
+}
+
+export function translateTierText(key, language = activeLanguage) {
+  const selected = normalizeLanguage(language);
+  return TIER_UI_TRANSLATIONS[selected]?.[key] || TIER_UI_TRANSLATIONS.en[key] || key;
+}
+
+export function getLanguage() {
+  try {
+    activeLanguage = normalizeLanguage(localStorage.getItem(LANGUAGE_KEY) || localStorage.getItem("myai_language"));
+  } catch {
+    return activeLanguage;
+  }
+  return activeLanguage;
+}
+
+export function applyLanguage(language = getLanguage()) {
+  const selected = normalizeLanguage(language);
+  document.documentElement.lang = selected;
+  document.documentElement.dir = selected === "ar" ? "rtl" : "ltr";
+  for (const selector of ["#languageSelect", "#landingLanguageSelect"]) {
+    const control = document.querySelector(selector);
+    if (control) control.value = selected;
+  }
+  if (document.title.startsWith("MyAI")) {
+    document.title = `MyAI | ${LANGUAGE_TITLES[selected] || "AI chat for work, learning, and creativity"}`;
+  }
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    const isMarkup = element.dataset.i18n === "landingTitle";
+    const defaultValue = isMarkup ? element.innerHTML : element.textContent;
+    if (!element.hasAttribute("data-default-value")) {
+      element.dataset.defaultValue = defaultValue;
+    }
+    const value = selected === "en"
+      ? element.dataset.defaultValue
+      : translateText(element.dataset.i18n, selected);
+    if (value === undefined) return;
+    if (isMarkup) element.innerHTML = value;
+    else element.textContent = value;
+  });
+  document.querySelectorAll("[data-i18n-dynamic]").forEach((element) => {
+    const key = element.dataset.i18nDynamic;
+    if (!element.hasAttribute("data-default-value")) {
+      element.dataset.defaultValue = element.textContent;
+    }
+    element.textContent = selected === "en"
+      ? element.dataset.defaultValue
+      : DYNAMIC_TRANSLATIONS[key]?.[selected] || element.dataset.defaultValue;
+  });
+  for (const [attribute, dataAttribute, selector] of [
+    ["aria-label", "i18nAriaLabel", "[data-i18n-aria-label]"],
+    ["title", "i18nTitle", "[data-i18n-title]"],
+  ]) {
+    document.querySelectorAll(selector).forEach((element) => {
+      const key = element.dataset[dataAttribute];
+      const defaultValue = element.dataset[`default${attribute === "aria-label" ? "AriaLabel" : "Title"}`]
+        || element.getAttribute(attribute)
+        || "";
+      element.dataset[`default${attribute === "aria-label" ? "AriaLabel" : "Title"}`] = defaultValue;
+      element.setAttribute(attribute, selected === "en" ? defaultValue : DYNAMIC_TRANSLATIONS[key]?.[selected] || defaultValue);
+    });
+  }
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+    if (!element.hasAttribute("data-default-placeholder")) {
+      element.dataset.defaultPlaceholder = element.getAttribute("placeholder") || "";
+    }
+    const value = selected === "en"
+      ? element.dataset.defaultPlaceholder
+      : translateText(element.dataset.i18nPlaceholder, selected);
+    if (value !== undefined) element.setAttribute("placeholder", value);
+  });
+}
+
+export function saveLanguage(language) {
+  const selected = normalizeLanguage(language);
+  activeLanguage = selected;
+  try {
+    localStorage.setItem(LANGUAGE_KEY, selected);
+    localStorage.setItem("myai_language", selected);
+  } catch {
+    // Keep the selection active for this tab if browser storage is unavailable.
+  }
+  applyLanguage(selected);
+  return selected;
+}

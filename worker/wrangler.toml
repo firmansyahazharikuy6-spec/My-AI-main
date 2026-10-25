@@ -1,0 +1,24 @@
+name = "myai-v3-free-api"
+main = "src/index.js"
+compatibility_date = "2026-10-14"
+workers_dev = true
+
+[vars]
+FIREBASE_PROJECT_ID = "my-ai-69027"
+APP_ORIGINS = ""
+
+[[ratelimits]]
+name = "GUEST_AI_LIMITER"
+namespace_id = "2026101540"
+
+	[ratelimits.simple]
+	limit = 5
+	period = 60
+
+[[durable_objects.bindings]]
+name = "GUEST_TRIAL_COUNTER"
+class_name = "GuestTrialCounter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GuestTrialCounter"]
