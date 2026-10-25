@@ -1,0 +1,10 @@
+const fs = require('fs');
+const path = 'c:/Users/xiao/Pictures/My-AI-main/js/providers.js';
+let text = fs.readFileSync(path, 'utf8');
+text = text.replace(/if \(key\) headers\.Authorization = `.*?;\n\s*return fetch\(/gs, 'if (key) headers.Authorization = `Bearer ${key}`;\n    return fetch(');
+console.log('after 1', text.includes('Bearer ${key}'));
+text = text.replace(/headers:\s*\{\s*Authorization:\s*`.*?`\s*\},/gs, 'headers: { Authorization: `Bearer ${key}` },');
+console.log('after 2', text.includes('Bearer ${key}'));
+text = text.replace(/Authorization:\s*`.*?\n\s*"Content-Type":\s*"application\/json"/gs, 'Authorization: `Bearer ${key}`,\n      "Content-Type": "application/json"');
+console.log('after 3', text.includes('Bearer ${key}'));
+console.log(JSON.stringify(text.slice(text.indexOf('Authorization')-40, text.indexOf('Authorization')+120)));
