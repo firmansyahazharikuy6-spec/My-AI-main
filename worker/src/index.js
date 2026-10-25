@@ -21,7 +21,19 @@ import {
   streamResponse as createStreamResponse,
 } from "./http.js";
 import { requireAuthorizedUser as authorizeUser } from "./auth.js";
+import {
+  AI_ROUTE_LIMITS,
+  AIRateLimitStore,
+  EMAIL_CONFIRMATION_TTL_MS,
+  EMAIL_DAILY_LIMIT,
+  EmailActionStore,
+  enforceAIRateLimit as applyAIRateLimit,
+  enforceGuestRateLimit as applyGuestRateLimit,
+  guestTrialCounter as countGuestTrial,
+  GuestTrialCounter,
+} from "./rate-limit.js";
 export { isAllowedOrigin } from "./http.js";
+export { AI_ROUTE_LIMITS, AIRateLimitStore, EmailActionStore, GuestTrialCounter } from "./rate-limit.js";
 
 const PROVIDERS = ["openrouter", "gemini", "groq", "nvidia", "anthropic", "moonshot"];
 const PROVIDER_KEY_NAMES = [...PROVIDERS, "monid", "explorium"];
@@ -39,9 +51,6 @@ const MAX_OUTPUT_TOKENS = 2048;
 const GUEST_MAX_OUTPUT_TOKENS = 512;
 const GUEST_MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const GUEST_MAX_IMAGE_CHARS = 1_500_000;
-const GUEST_TRIAL_LIMIT = 2;
-const EMAIL_DAILY_LIMIT = 20;
-const EMAIL_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 const MONID_API_BASE = "https://api.monid.ai/v1";
 const EXPLORIUM_API_BASE = "https://api.explorium.ai";
 const GEMINI_IMAGE_MODELS = [
@@ -71,26 +80,6 @@ let cachedOpenRouterModels = null;
 let cachedOpenRouterModelsExpiry = 0;
 let geminiImageConsecutiveFailures = 0;
 let geminiImageCircuitOpenUntil = 0;
-
-export const AI_ROUTE_LIMITS = Object.freeze({
-  chat: Object.freeze({ perMinute: 5, perDay: 100, label: "chat AI" }),
-  "image-chat": Object.freeze({ perMinute: 5, perDay: 10, label: "pembuatan gambar melalui chat" }),
-  "image-generate": Object.freeze({ perMinute: 5, perDay: 10, label: "pembuatan gambar" }),
-  transcribe: Object.freeze({ perMinute: 5, perDay: 30, label: "transkripsi audio" }),
-  "monid-discover": Object.freeze({ perMinute: 5, perDay: 20, label: "pencarian endpoint Monid" }),
-  "monid-inspect": Object.freeze({ perMinute: 5, perDay: 30, label: "pemeriksaan endpoint Monid" }),
-  "monid-run": Object.freeze({ perMinute: 5, perDay: 10, label: "run endpoint Monid" }),
-  "monid-get": Object.freeze({ perMinute: 5, perDay: 120, label: "pemeriksaan status run Monid" }),
-  "live-token": Object.freeze({ perMinute: 5, perDay: 10, label: "token Live AI" }),
-  "enhance-prompt": Object.freeze({ perMinute: 5, perDay: 60, label: "optimasi prompt" }),
-  "canva-oauth": Object.freeze({ perMinute: 5, perDay: 10, label: "koneksi Canva" }),
-  "canva-presentation": Object.freeze({ perMinute: 5, perDay: 10, label: "pembuatan presentasi" }),
-  explorium: Object.freeze({ perMinute: 5, perDay: 10, label: "pencarian Explorium" }),
-  "provider-health": Object.freeze({ perMinute: 5, perDay: 30, label: "tes kesehatan provider" }),
-  "provider-test": Object.freeze({ perMinute: 5, perDay: 30, label: "tes koneksi provider" }),
-  "email-preview": Object.freeze({ perMinute: 5, perDay: 20, label: "pratinjau email" }),
-  email: Object.freeze({ perMinute: 5, perDay: 20, label: "pengiriman email" }),
-});
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -258,72 +247,9 @@ async function validateGuestAccess(request, env) {
   return { deviceId };
 }
 
-async function enforceGuestRateLimit(request, env, deviceId) {
-  if (!env.AI_RATE_LIMITER) {
-    throw new HttpError(503, "AI guest belum diaktifkan. Admin perlu deploy binding rate limit Worker.");
-  }
-  const ip = request.headers.get("cf-connecting-ip");
-  if (!ip) throw new HttpError(503, "AI guest tidak tersedia pada jaringan ini.");
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deviceId));
-  const deviceKey = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  for (const key of [`guest-ip:${ip}`, `guest-device:${deviceKey}`]) {
-    const { success } = await env.AI_RATE_LIMITER.limit({ key });
-    if (!success) throw new HttpError(429, "Batas AI guest tercapai. Coba lagi setelah satu menit.");
-  }
-}
-
-async function enforceAIRateLimit(user, env, route) {
-  const limits = AI_ROUTE_LIMITS[route];
-  if (!limits) throw new HttpError(500, "Konfigurasi batas AI untuk route ini tidak tersedia.");
-  const identity = typeof user?.sub === "string" ? user.sub : "";
-  if (!identity) throw new HttpError(401, "Masuk dengan akun untuk menggunakan layanan AI.");
-  if (!env.AI_RATE_LIMITER) {
-    throw new HttpError(503, "Rate limit AI belum dikonfigurasi di Cloudflare Worker.");
-  }
-  const { success } = await env.AI_RATE_LIMITER.limit({ key: `${route}:${identity}` });
-  if (!success) throw new HttpError(429, `Batas ${limits.label} per menit tercapai. Coba lagi setelah satu menit.`);
-  if (!env.AI_DAILY_RATE_LIMIT_STORE) {
-    throw new HttpError(503, "Penyimpanan batas harian AI belum dikonfigurasi di Cloudflare Worker.");
-  }
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity));
-  const name = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  const id = env.AI_DAILY_RATE_LIMIT_STORE.idFromName(name);
-  const stub = env.AI_DAILY_RATE_LIMIT_STORE.get(id);
-  let response;
-  try {
-    response = await stub.fetch("https://ai-daily-rate-limit.internal/reserve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ route, limit: limits.perDay }),
-    });
-  } catch {
-    throw new HttpError(503, "Batas harian AI tidak dapat diperiksa. Coba lagi nanti.");
-  }
-  if (!response.ok) throw new HttpError(503, "Batas harian AI tidak dapat diperiksa. Coba lagi nanti.");
-  let result;
-  try {
-    result = await response.json();
-  } catch {
-    throw new HttpError(503, "Respons batas harian AI tidak valid. Coba lagi nanti.");
-  }
-  if (result.allowed !== true) {
-    throw new HttpError(429, `Batas harian ${limits.label} tercapai. Coba lagi besok.`);
-  }
-}
-
-async function guestTrialCounter(request, env, action, deviceId) {
-  const ip = request.headers.get("cf-connecting-ip");
-  if (!ip || !env.GUEST_TRIAL_COUNTER) {
-    throw new HttpError(503, "Batas uji coba guest belum dikonfigurasi di Cloudflare Worker.");
-  }
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${ip}:${deviceId}`));
-  const name = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  const id = env.GUEST_TRIAL_COUNTER.idFromName(name);
-  const stub = env.GUEST_TRIAL_COUNTER.get(id);
-  const response = await stub.fetch(`https://guest-trial.internal/${action}`, { method: "POST" });
-  if (!response.ok) throw new HttpError(503, "Batas uji coba guest tidak dapat diperiksa. Coba lagi nanti.");
-  return response.json();
-}
+const enforceGuestRateLimit = (request, env, deviceId) => applyGuestRateLimit(request, env, deviceId, HttpError);
+const enforceAIRateLimit = (user, env, route) => applyAIRateLimit(user, env, route, HttpError);
+const guestTrialCounter = (request, env, action, deviceId) => countGuestTrial(request, env, action, deviceId, HttpError);
 
 function freeGatewayModels(groups) {
   const models = groups.flatMap((group) => {
@@ -2437,125 +2363,6 @@ async function sendEmail(request, env, user) {
     throw new HttpError(502, "Resend tidak mengonfirmasi pengiriman email.");
   }
   return jsonResponse({ ok: true, id: result.id });
-}
-
-export class GuestTrialCounter {
-  constructor(ctx) {
-    this.ctx = ctx;
-  }
-
-  async fetch(request) {
-    const action = new URL(request.url).pathname.split("/").filter(Boolean).at(-1);
-    if (action === "status") {
-      const used = (await this.ctx.storage.get("used")) || 0;
-      return Response.json({ remaining: Math.max(0, GUEST_TRIAL_LIMIT - used) });
-    }
-    if (action === "reserve") {
-      const result = await this.ctx.storage.transaction(async (txn) => {
-        const used = await txn.get("used") || 0;
-        if (used >= GUEST_TRIAL_LIMIT) return { reserved: false, remaining: 0 };
-        const next = used + 1;
-        await txn.put("used", next);
-        return { reserved: true, remaining: GUEST_TRIAL_LIMIT - next };
-      });
-      return Response.json(result);
-    }
-    if (action === "refund") {
-      const result = await this.ctx.storage.transaction(async (txn) => {
-        const used = await txn.get("used") || 0;
-        const next = Math.max(0, used - 1);
-        await txn.put("used", next);
-        return { remaining: GUEST_TRIAL_LIMIT - next };
-      });
-      return Response.json(result);
-    }
-    return new Response("Not found", { status: 404 });
-  }
-}
-
-export class AIRateLimitStore {
-  constructor(ctx) {
-    this.ctx = ctx;
-  }
-
-  async fetch(request) {
-    if (request.method !== "POST" || new URL(request.url).pathname !== "/reserve") {
-      return new Response("Not found", { status: 404 });
-    }
-    let body;
-    try {
-      body = await request.json();
-    } catch {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-    const limits = AI_ROUTE_LIMITS[body?.route];
-    if (!limits || body.limit !== limits.perDay) {
-      return Response.json({ error: "Invalid route or limit" }, { status: 400 });
-    }
-    const day = new Date().toISOString().slice(0, 10);
-    const storageKey = `daily:${body.route}:${day}`;
-    const result = await this.ctx.storage.transaction(async (txn) => {
-      const used = await txn.get(storageKey) || 0;
-      if (used >= limits.perDay) return { allowed: false, remaining: 0 };
-      const next = used + 1;
-      await txn.put(storageKey, next);
-      return { allowed: true, remaining: limits.perDay - next };
-    });
-    return Response.json(result);
-  }
-}
-
-export class EmailActionStore {
-  constructor(ctx) {
-    this.ctx = ctx;
-  }
-
-  async fetch(request) {
-    if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-    const action = new URL(request.url).pathname.split("/").filter(Boolean).at(-1);
-    let body;
-    try {
-      body = await request.json();
-    } catch {
-      return Response.json({ error: "Invalid JSON" }, { status: 400 });
-    }
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return Response.json({ error: "Invalid request body" }, { status: 400 });
-    }
-    if (!/^[a-f0-9]{64}$/.test(body.tokenHash || "") || !/^[a-f0-9]{64}$/.test(body.payloadHash || "")) {
-      return Response.json({ error: "Invalid email confirmation data" }, { status: 400 });
-    }
-    if (action === "preview") {
-      await this.ctx.storage.transaction(async (txn) => {
-        await txn.put("email-preview", {
-          tokenHash: body.tokenHash,
-          payloadHash: body.payloadHash,
-          expiresAt: Date.now() + EMAIL_CONFIRMATION_TTL_MS,
-        });
-      });
-      return Response.json({ created: true });
-    }
-    if (action === "reserve-send") {
-      const result = await this.ctx.storage.transaction(async (txn) => {
-        const preview = await txn.get("email-preview");
-        if (!preview
-          || preview.expiresAt <= Date.now()
-          || preview.tokenHash !== body.tokenHash
-          || preview.payloadHash !== body.payloadHash) {
-          return { confirmed: false, reserved: false };
-        }
-        const today = new Date().toISOString().slice(0, 10);
-        const daily = await txn.get("email-daily-count");
-        const count = daily?.day === today ? daily.count : 0;
-        if (count >= EMAIL_DAILY_LIMIT) return { confirmed: true, reserved: false };
-        await txn.delete("email-preview");
-        await txn.put("email-daily-count", { day: today, count: count + 1 });
-        return { confirmed: true, reserved: true, remaining: EMAIL_DAILY_LIMIT - count - 1 };
-      });
-      return Response.json(result);
-    }
-    return new Response("Not found", { status: 404 });
-  }
 }
 
 export default {
