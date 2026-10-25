@@ -5220,6 +5220,12 @@ dialog:not(.voice-chat-dialog):not(.html-preview-dialog):not(.file-preview-dialo
 }
 
 @media (max-width: 800px) {
+  .composer {
+    margin-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 800px) {
   .composer-toolbar-secondary {
     column-gap: 8px;
     row-gap: 8px;
