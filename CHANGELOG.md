@@ -13,6 +13,17 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 
 ---
 
+## Kuota AI Lokal Free 5/hari dengan counter independen dan idempotensi (31 Oktober 2026)
+
+- **Keputusan pemilik produk:** di luar admin hanya berlaku 5x/hari untuk AI Lokal; admin (email `AI_ADMIN_EMAILS`) tanpa batas. Sebelumnya AI Lokal ditampilkan "tanpa batas" untuk semua akun.
+- **Counter harian independen:** `daily:local-chat:<ISO-date>` di Durable Object yang sama dengan kuota cloud, terpisah dari `daily:cloud-chat` (chat lokal tidak memakai kuota cloud, dan sebaliknya). Limit dibaca dari variabel Worker `LOCAL_AI_DAILY_LIMIT` (default 5, dapat diubah lewat konfigurasi deploy).
+- **Reservasi atomik + idempotensi:** endpoint baru `POST /api/local-quota/reserve` (login wajib, di-proxy lewat Pages) memesan satu penggunaan AI Lokal sebelum inferensi. `idempotencyKey` dari frontend (satu kunci per pesan pengguna — retry/fallback mesin tidak membakar kuota ganda) disimpan di DO dengan TTL 1 jam; pemutaran ulang kunci mengembalikan hasil tersimpan tanpa menambah counter. Error `LOCAL_QUOTA_EXCEEDED` (429) dikembalikan saat kuota habis.
+- **Kebijakan refund:** AI Lokal tidak menimbulkan biaya provider, jadi reservasi dihitung saat eksekusi dimulai tanpa refund — konsisten untuk semua kasus (termasuk kegagalan model).
+- **Frontend:** gate kuota dipanggil sebelum setiap inferensi lokal untuk pengguna login (guest/trial tetap memakai counter trial 2 respons, tidak tersentuh); dialog kuota varian lokal; indikator "AI Lokal: X/5 tersisa" di menu akun; dashboard menampilkan bagian "Pemakaian AI Lokal Hari Ini"; copy "tanpa batas" yang kedaluwarsa diperbaiki (dialog tier EN+ID, label mesin adaptif, pesan fallback, error Worker).
+- Test regresi bertambah 3 untuk kuota lokal, idempotensi, dan bypass admin (312 tes, 306 pass, 0 fail). Detail fase: [docs/BASELINE-V5.md](./docs/BASELINE-V5.md) §5.
+
+---
+
 ## Visibilitas tier, katalog WebGPU lokal, dan perbaikan CSP WebGPU (31 Oktober 2026)
 
 - Matriks visibilitas tier diubah: FREE hanya menampilkan model AI lokal (WebGPU & Ollama) tanpa model API Groq/NVIDIA/OpenRouter; BASIC hanya menampilkan model tier basic; PRO menampilkan free+basic+pro; MAX menampilkan semua. Fallback otomatis dan pemilihan model kini juga dibatasi oleh tier dan provider yang diizinkan.

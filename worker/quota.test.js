@@ -5,8 +5,10 @@ import {
   CLOUD_CHAT_DAILY_LIMIT,
   DEVICE_IDLE_PRUNE_MS,
   IP_CLOUD_CHAT_DAILY_SIGNAL,
+  LOCAL_AI_DAILY_LIMIT,
   MAX_ACCOUNT_DEVICES,
   enforceCloudChatQuota,
+  reserveLocalChatQuota,
 } from "./src/rate-limit.js";
 
 function memoryStorage() {
@@ -165,4 +167,70 @@ test("IP abuse block fires before the cloud chat reservation burns quota", async
   const status = await (await accountStore.fetch(storeRequest(accountStore, "/quota/status", {}))).json();
   assert.equal(status.chatUsed, 0, "IP-blocked request must not consume cloud chat quota");
   assert.equal(status.deviceCount, 1, "device heartbeat still registers before the IP check");
+});
+
+test("local AI quota allows 5 reserves per day then blocks without touching cloud chat", async () => {
+  const store = new AIRateLimitStore({ storage: memoryStorage() });
+  const reserve = () => storeRequest(store, "/local-chat/reserve", { limit: LOCAL_AI_DAILY_LIMIT });
+  for (let index = 0; index < LOCAL_AI_DAILY_LIMIT; index += 1) {
+    const result = await (await store.fetch(reserve())).json();
+    assert.equal(result.allowed, true);
+    assert.equal(result.remaining, LOCAL_AI_DAILY_LIMIT - index - 1);
+  }
+  const exhausted = await (await store.fetch(reserve())).json();
+  assert.deepEqual(exhausted, { allowed: false, remaining: 0 });
+
+  const cloud = await (await store.fetch(
+    storeRequest(store, "/cloud-chat/reserve", { limit: CLOUD_CHAT_DAILY_LIMIT }),
+  )).json();
+  assert.equal(cloud.allowed, true, "local usage must not consume cloud chat quota");
+  const status = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(status.localUsed, LOCAL_AI_DAILY_LIMIT);
+  assert.equal(status.localRemaining, 0);
+  assert.equal(status.chatUsed, 1);
+
+  const invalid = await store.fetch(storeRequest(store, "/local-chat/reserve", { limit: 0 }));
+  assert.equal(invalid.status, 400, "invalid local limits must be rejected");
+});
+
+test("local reserve idempotency key prevents double counting on retries", async () => {
+  const store = new AIRateLimitStore({ storage: memoryStorage() });
+  const reserve = (key) => storeRequest(store, "/local-chat/reserve", {
+    limit: LOCAL_AI_DAILY_LIMIT,
+    idempotencyKey: key,
+  });
+  const first = await (await store.fetch(reserve("retry-key-0001"))).json();
+  assert.equal(first.allowed, true);
+  const replay = await (await store.fetch(reserve("retry-key-0001"))).json();
+  assert.deepEqual(replay, first, "replaying the same key must return the stored result");
+  const fresh = await (await store.fetch(reserve("retry-key-0002"))).json();
+  assert.equal(fresh.allowed, true);
+  const status = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(status.localUsed, 2, "replayed reservations must not increment the counter");
+});
+
+test("reserveLocalChatQuota enforces the configured limit and bypasses for admin", async () => {
+  const binding = fakeQuotaBinding();
+  const user = { sub: "local-user", email: "local@example.com", email_verified: true };
+  const env = { AI_DAILY_RATE_LIMIT_STORE: binding, LOCAL_AI_DAILY_LIMIT: "2" };
+  const first = await reserveLocalChatQuota(user, env, TestHttpError, "gate-key-0001");
+  assert.equal(first.admin, false);
+  assert.equal(first.allowed, true);
+  assert.equal(first.limit, 2, "configured LOCAL_AI_DAILY_LIMIT must override the default");
+  assert.equal(first.remaining, 1);
+  await reserveLocalChatQuota(user, env, TestHttpError, "gate-key-0002");
+  await assert.rejects(
+    () => reserveLocalChatQuota(user, env, TestHttpError, "gate-key-0003"),
+    (error) => error.code === "LOCAL_QUOTA_EXCEEDED" && error.status === 429,
+  );
+
+  const admin = { sub: "admin-user", email: "muhammadfirmansyahashari@gmail.com", email_verified: true };
+  const adminEnv = {
+    AI_ADMIN_EMAILS: "muhammadfirmansyahashari@gmail.com",
+    AI_DAILY_RATE_LIMIT_STORE: binding,
+  };
+  const adminReserve = await reserveLocalChatQuota(admin, adminEnv, TestHttpError, "gate-key-0004");
+  assert.equal(adminReserve.admin, true);
+  assert.equal(adminReserve.allowed, true);
+  assert.equal(adminReserve.limit, null);
 });

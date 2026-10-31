@@ -2,6 +2,8 @@ export const GUEST_TRIAL_LIMIT = 2;
 export const EMAIL_DAILY_LIMIT = 20;
 export const EMAIL_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 export const CLOUD_CHAT_DAILY_LIMIT = 3;
+export const LOCAL_AI_DAILY_LIMIT = 5;
+export const LOCAL_RESERVE_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000;
 export const MAX_ACCOUNT_DEVICES = 5;
 export const IP_CLOUD_CHAT_DAILY_SIGNAL = 200;
 export const DEVICE_IDLE_PRUNE_MS = 90 * 24 * 60 * 60 * 1000;
@@ -34,6 +36,12 @@ export function isMaintenanceAdmin(user, env) {
     .some((allowed) => allowed.trim().toLowerCase() === email);
 }
 
+export function localAiDailyLimit(user, env) {
+  const configured = Number(env?.LOCAL_AI_DAILY_LIMIT);
+  if (Number.isSafeInteger(configured) && configured >= 0) return configured;
+  return LOCAL_AI_DAILY_LIMIT;
+}
+
 async function sha256Hex(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value)));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -62,6 +70,7 @@ export async function getAccountQuotaStatus(user, env) {
       admin: true,
       plan: "admin",
       chat: { used: 0, limit: null, remaining: null },
+      local: { used: 0, limit: null, remaining: null },
       devices: { count: 1, limit: null },
       adminEmails: String(env?.AI_ADMIN_EMAILS || "").split(",").map((value) => value.trim()).filter(Boolean),
     };
@@ -70,11 +79,15 @@ export async function getAccountQuotaStatus(user, env) {
     throw new Error("Penyimpanan kuota belum dikonfigurasi di Cloudflare Worker.");
   }
   const stub = await accountQuotaStub(env, user);
-  const status = await accountQuotaRequest(stub, "quota/status", {});
+  const status = await accountQuotaRequest(stub, "quota/status", {
+    cloudLimit: CLOUD_CHAT_DAILY_LIMIT,
+    localLimit: localAiDailyLimit(user, env),
+  });
   return {
     admin: false,
     plan: "free",
     chat: { used: status.chatUsed, limit: CLOUD_CHAT_DAILY_LIMIT, remaining: status.chatRemaining },
+    local: { used: status.localUsed, limit: localAiDailyLimit(user, env), remaining: status.localRemaining },
     devices: { count: status.deviceCount, limit: MAX_ACCOUNT_DEVICES },
   };
 }
@@ -131,11 +144,38 @@ export async function enforceCloudChatQuota(user, env, request, HttpError) {
   }
   if (reserve.allowed !== true) {
     const error = new HttpError(429,
-      `Batas chat cloud harian tercapai (${CLOUD_CHAT_DAILY_LIMIT}/hari untuk paket Free). Upgrade paket atau lanjutkan dengan AI lokal tanpa batas.`);
+      `Batas chat cloud harian tercapai (${CLOUD_CHAT_DAILY_LIMIT}/hari untuk paket Free). Upgrade paket atau lanjutkan dengan AI lokal (5/hari untuk paket Free).`);
     error.code = "CLOUD_QUOTA_EXCEEDED";
     throw error;
   }
   return { admin: false, remaining: reserve.remaining, limit: CLOUD_CHAT_DAILY_LIMIT };
+}
+
+export async function reserveLocalChatQuota(user, env, HttpError, idempotencyKey = "") {
+  if (isMaintenanceAdmin(user, env)) {
+    return { admin: true, allowed: true, remaining: null, limit: null };
+  }
+  if (!env.AI_DAILY_RATE_LIMIT_STORE) {
+    throw new HttpError(503, "Penyimpanan kuota AI lokal belum dikonfigurasi di Cloudflare Worker.");
+  }
+  const stub = await accountQuotaStub(env, user);
+  const limit = localAiDailyLimit(user, env);
+  let result;
+  try {
+    result = await accountQuotaRequest(stub, "local-chat/reserve", {
+      limit,
+      idempotencyKey: /^[A-Za-z0-9-]{8,64}$/.test(String(idempotencyKey || "")) ? idempotencyKey : "",
+    });
+  } catch {
+    throw new HttpError(503, "Kuota AI lokal tidak dapat diperiksa. Coba lagi nanti.");
+  }
+  if (result.allowed !== true) {
+    const error = new HttpError(429,
+      `Batas AI lokal harian tercapai (${limit}/hari untuk paket Free). Upgrade paket atau coba lagi besok.`);
+    error.code = "LOCAL_QUOTA_EXCEEDED";
+    throw error;
+  }
+  return { admin: false, allowed: true, remaining: result.remaining, limit };
 }
 
 export function outputTokenLimitForUser() {
@@ -328,6 +368,40 @@ export class AIRateLimitStore {
       });
       return Response.json(result);
     }
+    if (pathname === "/local-chat/reserve") {
+      if (!Number.isSafeInteger(body?.limit) || body.limit < 1 || body.limit > 1000) {
+        return Response.json({ error: "Invalid local chat limit" }, { status: 400 });
+      }
+      const idempotencyKey = /^[A-Za-z0-9-]{8,64}$/.test(body?.idempotencyKey || "") ? body.idempotencyKey : "";
+      const day = new Date().toISOString().slice(0, 10);
+      const storageKey = `daily:local-chat:${day}`;
+      const now = Date.now();
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        if (idempotencyKey) {
+          const replay = await txn.get(`idempotency:${idempotencyKey}`);
+          if (replay && typeof replay.expiresAt === "number" && replay.expiresAt > now && replay.result) {
+            return replay.result;
+          }
+          const stale = await txn.list({ prefix: "idempotency:" });
+          for (const [key, record] of stale) {
+            if (record && typeof record.expiresAt === "number" && record.expiresAt <= now) await txn.delete(key);
+          }
+        }
+        const used = await txn.get(storageKey) || 0;
+        const outcome = used >= body.limit
+          ? { allowed: false, remaining: 0 }
+          : { allowed: true, remaining: body.limit - used - 1 };
+        if (outcome.allowed) await txn.put(storageKey, used + 1);
+        if (idempotencyKey) {
+          await txn.put(`idempotency:${idempotencyKey}`, {
+            expiresAt: now + LOCAL_RESERVE_IDEMPOTENCY_TTL_MS,
+            result: outcome,
+          });
+        }
+        return outcome;
+      });
+      return Response.json(result);
+    }
     if (pathname === "/ip-signal/reserve") {
       if (!Number.isSafeInteger(body?.limit) || body.limit < 1) {
         return Response.json({ error: "Invalid ip signal limit" }, { status: 400 });
@@ -348,9 +422,16 @@ export class AIRateLimitStore {
       const idlePruneMs = Number.isSafeInteger(body?.idlePruneMs) && body.idlePruneMs >= 0
         ? body.idlePruneMs
         : DEVICE_IDLE_PRUNE_MS;
+      const cloudLimit = Number.isSafeInteger(body?.cloudLimit) && body.cloudLimit >= 1
+        ? body.cloudLimit
+        : CLOUD_CHAT_DAILY_LIMIT;
+      const localLimit = Number.isSafeInteger(body?.localLimit) && body.localLimit >= 1
+        ? body.localLimit
+        : LOCAL_AI_DAILY_LIMIT;
       const now = Date.now();
-      const [chatUsed, devices] = await Promise.all([
+      const [chatUsed, localUsed, devices] = await Promise.all([
         this.ctx.storage.get(`daily:cloud-chat:${day}`),
+        this.ctx.storage.get(`daily:local-chat:${day}`),
         this.ctx.storage.list({ prefix: "device:" }),
       ]);
       const activeDevices = [...devices.values()].filter((record) => record
@@ -358,7 +439,9 @@ export class AIRateLimitStore {
         && now - record.lastSeen < idlePruneMs).length;
       return Response.json({
         chatUsed: chatUsed || 0,
-        chatRemaining: Math.max(0, CLOUD_CHAT_DAILY_LIMIT - (chatUsed || 0)),
+        chatRemaining: Math.max(0, cloudLimit - (chatUsed || 0)),
+        localUsed: localUsed || 0,
+        localRemaining: Math.max(0, localLimit - (localUsed || 0)),
         deviceCount: activeDevices,
       });
     }

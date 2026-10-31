@@ -31,6 +31,7 @@ import {
   enforceCloudChatQuota as applyCloudChatQuota,
   enforceGuestRateLimit as applyGuestRateLimit,
   getAccountQuotaStatus,
+  reserveLocalChatQuota,
   guestTrialCounter as countGuestTrial,
   GuestTrialCounter,
 } from "./rate-limit.js";
@@ -1735,6 +1736,7 @@ export default {
       const exploriumRoute = pathSegments.slice(-2).join("/");
       const providerTestRoute = pathSegments.slice(-2).join("/");
       const sendEmailRoute = pathSegments.slice(-2).join("/");
+      const localQuotaRoute = pathSegments.slice(-2).join("/");
       const healthRoute = route === "health";
       const canvaCallbackResponse = await handleCanvaCallback(request, env, HttpError);
       if (canvaCallbackResponse) return canvaCallbackResponse;
@@ -1826,6 +1828,12 @@ export default {
       if (route === "quota") {
         if (request.method !== "GET") throw new HttpError(405, "Gunakan GET untuk melihat kuota akun.");
         return jsonResponse(await getAccountQuotaStatus(user, env));
+      }
+      if (localQuotaRoute === "local-quota/reserve") {
+        if (request.method !== "POST") throw new HttpError(405, "Gunakan POST untuk memesan kuota AI lokal.");
+        const body = await readJsonBody(request);
+        const idempotencyKey = typeof body?.idempotencyKey === "string" ? body.idempotencyKey : "";
+        return jsonResponse(await reserveLocalChatQuota(user, env, HttpError, idempotencyKey));
       }
       if (route === "chat") return await chat(request, keys, user, env);
       if (route === "enhance-prompt") {

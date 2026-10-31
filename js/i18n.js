@@ -3,9 +3,9 @@ let activeLanguage = "en";
 const TIER_UI_TRANSLATIONS = {
   en: {
     tierPickerTitle: "AI engine", tierEyebrow: "MYAI ENGINE SELECTOR", tierDialogTitle: "Choose your AI engine",
-    tierDialogCopy: "Choose your AI engine tier. The Free plan keeps 3 cloud chats per day plus unlimited local AI; higher tiers unlock more cloud models.", tierActive: "Status: Active",
+    tierDialogCopy: "Choose your AI engine tier. The Free plan keeps 3 cloud chats and 5 local AI chats per day; higher tiers unlock more cloud models.", tierActive: "Status: Active",
     tierReady: "Status: Ready", tierSelected: "Status: Selected", tierConfirm: "🚀 Activate engine",
-    tierFreeFeature0: "On-device local models (WebGPU & Ollama)", tierFreeFeature1: "Basic chat and image creation", tierFreeFeature2: "3 cloud chats/day + unlimited local AI",
+    tierFreeFeature0: "On-device local models (WebGPU & Ollama)", tierFreeFeature1: "Basic chat and image creation", tierFreeFeature2: "3 cloud + 5 local AI chats/day",
     tierBasicFeature0: "Fast cloud models", tierBasicFeature1: "File and document analysis", tierBasicFeature2: "Great for routine work",
     tierProFeature0: "Reasoning and coding models", tierProFeature1: "More complex work context", tierProFeature2: "Built for professionals",
     tierMaxFeature0: "Largest configured models", tierMaxFeature1: "Maximum reasoning and context", tierMaxFeature2: "Built for demanding work",
@@ -19,9 +19,9 @@ const TIER_UI_TRANSLATIONS = {
   },
   id: {
     tierPickerTitle: "Engine AI", tierEyebrow: "PEMILIH ENGINE MYAI", tierDialogTitle: "Pilih engine AI",
-    tierDialogCopy: "Pilih engine AI. Paket Free: 3 chat cloud per hari + AI lokal tanpa batas; paket lebih tinggi membuka lebih banyak model cloud.", tierActive: "Status: Aktif",
+    tierDialogCopy: "Pilih engine AI. Paket Free: 3 chat cloud + 5 chat AI lokal per hari; paket lebih tinggi membuka lebih banyak model cloud.", tierActive: "Status: Aktif",
     tierReady: "Status: Siap", tierSelected: "Status: Dipilih", tierConfirm: "🚀 Aktifkan engine",
-    tierFreeFeature0: "Model AI lokal di perangkat (WebGPU & Ollama)", tierFreeFeature1: "Chat dan pembuatan gambar dasar", tierFreeFeature2: "3 chat cloud/hari + AI lokal tanpa batas",
+    tierFreeFeature0: "Model AI lokal di perangkat (WebGPU & Ollama)", tierFreeFeature1: "Chat dan pembuatan gambar dasar", tierFreeFeature2: "3 cloud + 5 AI lokal per hari",
     tierBasicFeature0: "Model cloud ringan dan cepat", tierBasicFeature1: "Analisis file dan dokumen", tierBasicFeature2: "Cocok untuk pekerjaan rutin",
     tierProFeature0: "Model reasoning dan coding", tierProFeature1: "Konteks kerja lebih kompleks", tierProFeature2: "Cocok untuk profesional",
     tierMaxFeature0: "Model besar yang dikonfigurasi", tierMaxFeature1: "Penalaran dan konteks maksimum", tierMaxFeature2: "Cocok untuk tugas paling berat",

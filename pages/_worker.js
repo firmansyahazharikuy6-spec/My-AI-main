@@ -7,6 +7,7 @@ const API_ROUTES = new Map([
   ["/api/guest/images/pollinations", "/guest/images/pollinations"],
   ["/api/models", "/models"],
   ["/api/quota", "/quota"],
+  ["/api/local-quota/reserve", "/local-quota/reserve"],
   ["/api/health", "/health"],
   ["/api/providers/test", "/providers/test"],
   ["/api/chat", "/chat"],

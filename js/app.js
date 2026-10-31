@@ -503,7 +503,8 @@ function isRateLimitOrQuotaError(error) {
 }
 
 function isAccountQuotaError(error) {
-  return /CLOUD_QUOTA_EXCEEDED|DEVICE_LIMIT_EXCEEDED/i.test(String(error?.message || error || ""));
+  return /CLOUD_QUOTA_EXCEEDED|DEVICE_LIMIT_EXCEEDED|LOCAL_QUOTA_EXCEEDED/i.test(String(error?.code || ""))
+    || /CLOUD_QUOTA_EXCEEDED|DEVICE_LIMIT_EXCEEDED|LOCAL_QUOTA_EXCEEDED/i.test(String(error?.message || error || ""));
 }
 
 async function refreshAccountQuota() {
@@ -534,9 +535,9 @@ function renderAccountQuota() {
     text.textContent = "Chat Cloud: memuat…";
     return;
   }
-  const { admin, chat: chatQuota, devices } = accountQuota;
+  const { admin, chat: chatQuota, local: localQuota, devices } = accountQuota;
   if (admin) {
-    text.textContent = "Chat Cloud: tanpa batas · Admin";
+    text.textContent = "AI Cloud & Lokal: tanpa batas · Admin";
     return;
   }
   const remaining = chatQuota?.remaining;
@@ -544,19 +545,73 @@ function renderAccountQuota() {
   const chatText = remaining === null || remaining === undefined || limit === null || limit === undefined
     ? "Chat Cloud: paket Free"
     : `Chat Cloud: ${remaining}/${limit} tersisa`;
+  const localRemaining = localQuota?.remaining;
+  const localLimit = localQuota?.limit;
+  const localText = localRemaining === null || localRemaining === undefined || localLimit === null || localLimit === undefined
+    ? ""
+    : ` · AI Lokal: ${localRemaining}/${localLimit} tersisa`;
   const deviceText = devices?.count !== undefined && devices?.limit !== undefined
     ? ` · Perangkat ${devices.count}/${devices.limit}`
     : "";
-  text.textContent = chatText + deviceText;
+  text.textContent = chatText + localText + deviceText;
+}
+
+async function reserveLocalQuota({ idempotencyKey = "", signal } = {}) {
+  const token = await getAuthToken();
+  const response = await fetchAiApi("local-quota/reserve", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ idempotencyKey }),
+    cache: "no-store",
+    signal,
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (response.status === 429) {
+    const error = new Error(payload?.error?.message || "Batas AI lokal harian tercapai.");
+    error.code = payload?.error?.code || "LOCAL_QUOTA_EXCEEDED";
+    throw error;
+  }
+  if (!response.ok) {
+    throw new Error(`Kuota AI lokal tidak dapat diperiksa: HTTP ${response.status}.`);
+  }
+  if (payload?.admin !== true && payload?.allowed !== true) {
+    const error = new Error("Batas AI lokal harian tercapai.");
+    error.code = "LOCAL_QUOTA_EXCEEDED";
+    throw error;
+  }
+  if (Number.isInteger(payload?.remaining) && accountQuota && !accountQuota.admin) {
+    const limit = Number.isInteger(accountQuota.local?.limit) ? accountQuota.local.limit : payload.limit;
+    accountQuota = {
+      ...accountQuota,
+      local: {
+        used: Number.isInteger(limit) ? Math.max(0, limit - payload.remaining) : 0,
+        limit: Number.isInteger(limit) ? limit : null,
+        remaining: payload.remaining,
+      },
+    };
+    renderAccountQuota();
+  }
+  return payload;
 }
 
 function showQuotaDialog(error) {
+  const message = String(error?.message || "");
+  const localQuota = /LOCAL_QUOTA_EXCEEDED/i.test(String(error?.code || "")) || /LOCAL_QUOTA_EXCEEDED/i.test(message);
   const copy = document.getElementById("quotaDialogCopy");
   if (copy) {
-    copy.textContent = /DEVICE_LIMIT_EXCEEDED/i.test(String(error?.message || ""))
+    copy.textContent = /DEVICE_LIMIT_EXCEEDED/i.test(message)
       ? "Akun ini sudah dipakai di 5 perangkat. Pakai perangkat yang sudah terdaftar, atau hubungi admin MyAI untuk bantuan."
-      : "Paket Free MyAI menyediakan 3 chat cloud per hari. AI Lokal (WebGPU) tetap tanpa batas dan gratis.";
+      : localQuota
+        ? "Paket Free MyAI menyediakan 5 chat AI lokal per hari. Upgrade paket untuk tanpa batas, atau coba lagi besok."
+        : "Paket Free MyAI menyediakan 3 chat cloud per hari. AI Lokal tersedia 5 kali per hari — upgrade paket untuk tanpa batas.";
   }
+  const goLocal = document.getElementById("quotaGoLocal");
+  if (goLocal) goLocal.classList.toggle("hidden", localQuota);
   if (!quotaDialogShown) {
     quotaDialogShown = true;
     document.getElementById("quotaDialog")?.showModal();
@@ -573,6 +628,33 @@ function dashboardSection(title, build) {
   return section;
 }
 
+function dashboardUsageSection(title, labelText, used, limit, admin, noteText) {
+  return dashboardSection(title, (section) => {
+    const row = document.createElement("div");
+    row.className = "dashboard-usage-row";
+    const label = document.createElement("span");
+    label.className = "dashboard-usage-label";
+    label.textContent = labelText;
+    const value = document.createElement("span");
+    value.className = "dashboard-usage-value";
+    value.textContent = admin || limit === null || limit === undefined ? "Tanpa batas" : `${used} dari ${limit}`;
+    row.append(label, value);
+    const bar = document.createElement("div");
+    bar.className = "dashboard-usage-bar";
+    const fill = document.createElement("span");
+    const ratio = admin || !Number.isFinite(limit) || limit <= 0 ? 0 : Math.min(1, used / limit);
+    fill.style.width = `${Math.round(ratio * 100)}%`;
+    bar.append(fill);
+    section.append(row, bar);
+    if (noteText) {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.textContent = noteText;
+      section.append(note);
+    }
+  });
+}
+
 function renderAccountDashboard() {
   const body = document.getElementById("dashboardBody");
   if (!body) return;
@@ -582,12 +664,12 @@ function renderAccountDashboard() {
   body.append(dashboardSection("Paket", (section) => {
     const badge = document.createElement("span");
     badge.className = `dashboard-plan-badge ${admin ? "dashboard-plan-admin" : "dashboard-plan-free"}`;
-    badge.textContent = admin ? "ADMIN — tanpa batas" : "FREE — 3 chat cloud/hari";
+    badge.textContent = admin ? "ADMIN — tanpa batas" : "FREE — 3 cloud + 5 AI lokal/hari";
     const note = document.createElement("p");
     note.className = "muted";
     note.textContent = admin
-      ? "Akun admin dibebaskan dari kuota chat cloud dan batas perangkat."
-      : "AI Lokal (WebGPU & Ollama) tanpa batas dan gratis. Paket lebih tinggi membuka lebih banyak model cloud.";
+      ? "Akun admin dibebaskan dari kuota chat cloud, kuota AI lokal, dan batas perangkat."
+      : "AI Lokal (WebGPU & Ollama) 5 kali per hari untuk paket Free. Paket lebih tinggi membuka lebih banyak model cloud.";
     section.append(badge, note);
   }));
 
@@ -609,27 +691,25 @@ function renderAccountDashboard() {
     return;
   }
 
-  const { chat: chatQuota, devices } = accountQuota;
-  body.append(dashboardSection("Pemakaian Chat Cloud Hari Ini", (section) => {
-    const used = chatQuota?.used ?? 0;
-    const limit = chatQuota?.limit;
-    const row = document.createElement("div");
-    row.className = "dashboard-usage-row";
-    const label = document.createElement("span");
-    label.className = "dashboard-usage-label";
-    label.textContent = "Chat cloud terpakai";
-    const value = document.createElement("span");
-    value.className = "dashboard-usage-value";
-    value.textContent = admin || limit === null || limit === undefined ? "Tanpa batas" : `${used} dari ${limit}`;
-    row.append(label, value);
-    const bar = document.createElement("div");
-    bar.className = "dashboard-usage-bar";
-    const fill = document.createElement("span");
-    const ratio = admin || !Number.isFinite(limit) || limit <= 0 ? 0 : Math.min(1, used / limit);
-    fill.style.width = `${Math.round(ratio * 100)}%`;
-    bar.append(fill);
-    section.append(row, bar);
-  }));
+  const { chat: chatQuota, local: localQuota, devices } = accountQuota;
+  body.append(dashboardUsageSection(
+    "Pemakaian Chat Cloud Hari Ini",
+    "Chat cloud terpakai",
+    chatQuota?.used ?? 0,
+    chatQuota?.limit,
+    admin,
+    null,
+  ));
+  body.append(dashboardUsageSection(
+    "Pemakaian AI Lokal Hari Ini",
+    "Chat AI lokal terpakai (WebGPU & Ollama)",
+    localQuota?.used ?? 0,
+    localQuota?.limit,
+    admin,
+    admin
+      ? "Kuota AI lokal tidak berlaku untuk admin."
+      : "Kuota AI lokal terpisah dari kuota chat cloud dan dihitung ulang setiap hari.",
+  ));
 
   body.append(dashboardSection("Perangkat Terdaftar", (section) => {
     const row = document.createElement("div");
@@ -5733,6 +5813,8 @@ async function respond() {
     return copy;
   };
 
+  const localQuotaIdempotencyKey = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+
   const reply = {
     id: crypto.randomUUID(),
     role: "assistant",
@@ -5836,6 +5918,9 @@ async function respond() {
     };
     let activeProvider = providerStatusKey(model.provider);
     let activeModel = model.id;
+    if (isLocalProvider(model.provider) && currentUser) {
+      await reserveLocalQuota({ idempotencyKey: localQuotaIdempotencyKey, signal: abort.signal });
+    }
     const stream = imageGeneration
       ? model.imageOnly
         ? workerImageStream(last.autoPromptContent || last.content, {
@@ -6106,12 +6191,14 @@ async function respond() {
       const workerUnavailable = getProviderFailureStatus(error) === "UNREACHABLE";
       const quotaFailure = isRateLimitOrQuotaError(error);
       const accountQuotaFailure = isAccountQuotaError(error);
+      const localQuotaFailure = error?.code === "LOCAL_QUOTA_EXCEEDED"
+        || /LOCAL_QUOTA_EXCEEDED/i.test(String(error?.message || ""));
       reply.rateLimited ||= quotaFailure;
       reply.failedProviders ||= [];
       if (!reply.failedProviders.includes(canonicalProvider(m.provider))) {
         reply.failedProviders.push(canonicalProvider(m.provider));
       }
-      const alternatives = !workerUnavailable
+      const alternatives = !workerUnavailable && !localQuotaFailure
         ? documentFormat
           ? documentCandidates
             .filter((model) => canonicalProvider(model.provider) !== canonicalProvider(m.provider))
@@ -6151,7 +6238,7 @@ async function respond() {
               ? "Kuota atau kredit OpenRouter untuk Gemini Image tercapai."
               : `Gemini Image di OpenRouter gagal: ${explainAIError(error)}.`);
         }
-        if (accountQuotaFailure) {
+        if (accountQuotaFailure || localQuotaFailure) {
           throw error;
         }
         if (quotaFailure) {
@@ -6189,7 +6276,9 @@ async function respond() {
         : accountQuotaFailure
           ? /DEVICE_LIMIT_EXCEEDED/i.test(e.message || "")
             ? "Batas 5 perangkat per akun tercapai. Gunakan perangkat yang sudah terdaftar atau hubungi admin MyAI."
-            : "Batas 3 chat cloud per hari untuk paket Free sudah tercapai. AI Lokal tetap tanpa batas — pilih model WebGPU dari tombol model, atau lihat paket upgrade."
+            : /LOCAL_QUOTA_EXCEEDED/i.test(String(e?.code || "")) || /LOCAL_QUOTA_EXCEEDED/i.test(e.message || "")
+              ? "Batas 5 chat AI lokal per hari untuk paket Free sudah tercapai. Upgrade paket untuk tanpa batas, atau coba lagi besok."
+              : "Batas 3 chat cloud per hari untuk paket Free sudah tercapai. AI Lokal tersedia 5 kali per hari — pilih model WebGPU dari tombol model, atau lihat paket upgrade."
           : reply.rateLimited
             ? "Provider menolak permintaan karena HTTP 402/429. Kuota chat MyAI untuk akun login tidak aktif; kuota, saldo, dan rate limit provider tetap berlaku. Coba provider lain atau periksa billing."
             : `AI online belum dapat menjawab: ${explainAIError(e)}`;
@@ -6197,7 +6286,7 @@ async function respond() {
         toast(imageGeneration
           ? "Kuota atau kredit OpenRouter untuk Gemini Image sedang terbatas. MyAI tidak akan beralih ke provider gambar lain."
           : accountQuotaFailure
-            ? "Batas kuota paket MyAI tercapai. AI Lokal tetap tanpa batas, atau lihat paket upgrade."
+            ? "Batas kuota paket MyAI tercapai. Lihat paket upgrade untuk menambah kuota."
             : "Batas penggunaan berasal dari provider. Kuota chat MyAI untuk akun login tidak aktif; kamu bisa mencoba provider lain dari tombol di bawah.");
       }
       reply.rawContent = reply.content;
@@ -6208,7 +6297,7 @@ async function respond() {
     abort = null;
     setBusy(false);
     $("progress").classList.add("hidden");
-    if (currentUser && !isLocalProvider(m.provider) && m.provider !== "guest") refreshAccountQuota();
+    if (currentUser && m.provider !== "guest") refreshAccountQuota();
     if (!reply.content && !reply.reasoning && !reply.generatedImages?.length) reply.content = "_(dihentikan)_";
     if (completed && !reply.error && !imageGeneration && reply.content.trim()) {
       try {

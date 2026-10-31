@@ -105,8 +105,8 @@ export function engineRouteLabel(model, { cloudRemaining = 0 } = {}) {
       ? `Cloud · ${model?.name || model?.id || "model cloud"} (kuota tersisa ${cloudRemaining})`
       : `Cloud · ${model?.name || model?.id || "model cloud"}`;
   }
-  if (kind === ENGINE_KINDS.webgpu) return "AI Lokal · WebGPU (tanpa batas, tanpa internet)";
-  if (kind === ENGINE_KINDS.ollama) return "AI Lokal · Ollama (tanpa batas, tanpa internet)";
+  if (kind === ENGINE_KINDS.webgpu) return "AI Lokal · WebGPU (tanpa internet)";
+  if (kind === ENGINE_KINDS.ollama) return "AI Lokal · Ollama (tanpa internet)";
   return model?.name || model?.id || "Model";
 }
 
