@@ -1,3 +1,5 @@
+import { fetchAiApi } from "./api-client.js?v=20261029-v5.130";
+
 const LIVE_MODEL = "gemini-3.8-live";
 const LIVE_SOCKET_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 const OUTPUT_RATE = 24000;
@@ -17,15 +19,16 @@ function liveConfig(systemInstruction) {
   };
 }
 
-async function requestLiveToken(apiBase, authToken) {
-  const response = await fetch(`${apiBase.replace(/\/+$/, "")}/live/token`, {
+async function requestLiveToken(apiBase, authToken, signal) {
+  const response = await fetchAiApi("live/token", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${authToken}`,
     },
     body: "{}",
-  });
+    signal,
+  }, { baseUrl: apiBase });
   if (!response.ok) {
     let message = `Worker gagal menyiapkan Gemini Live (HTTP ${response.status}).`;
     try {
@@ -103,9 +106,17 @@ async function websocketFrameText(data) {
   throw new Error(`Jenis frame Gemini Live tidak didukung: ${Object.prototype.toString.call(data)}.`);
 }
 
-export async function startGeminiLiveSession({ apiBase, authToken, systemInstruction, videoElement = null, onEvent = () => {} }) {
+export async function startGeminiLiveSession({
+  apiBase,
+  authToken,
+  systemInstruction,
+  videoElement = null,
+  signal,
+  onEvent = () => {},
+}) {
   if (!apiBase || !authToken) throw new Error("Masuk dengan akun yang diizinkan untuk memakai Gemini Live.");
   if (!window.isSecureContext) throw new Error("Percakapan realtime memerlukan HTTPS atau localhost.");
+  if (signal?.aborted) throw signal.reason || new DOMException("Sesi Gemini Live dibatalkan.", "AbortError");
   if (!navigator.mediaDevices?.getUserMedia || !window.WebSocket) {
     throw new Error("Browser ini tidak mendukung mikrofon atau koneksi realtime. Coba Chrome atau Edge terbaru.");
   }
@@ -121,54 +132,80 @@ export async function startGeminiLiveSession({ apiBase, authToken, systemInstruc
   let muteGain;
   let videoFrameTimer = 0;
   let closed = false;
+  let closePromise;
   let socketReady = false;
   let nextAudioStart = 0;
   const playbackNodes = new Set();
   const config = liveConfig(systemInstruction);
 
   const close = async () => {
-    if (closed) return;
+    if (closePromise) return closePromise;
     closed = true;
-    window.clearInterval(videoFrameTimer);
-    if (processor) {
-      processor.onaudioprocess = null;
-      processor.disconnect();
-    }
-    source?.disconnect();
-    muteGain?.disconnect();
-    for (const node of playbackNodes) {
-      try {
-        node.stop();
-      } catch (error) {
-        if (error.name !== "InvalidStateError") console.warn("Live audio cleanup failed:", error);
+    signal?.removeEventListener("abort", handleAbort);
+    closePromise = (async () => {
+      window.clearInterval(videoFrameTimer);
+      if (processor) {
+        processor.onaudioprocess = null;
+        processor.disconnect();
       }
-    }
-    playbackNodes.clear();
-    mediaStream?.getTracks().forEach((track) => track.stop());
-    if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, "Voice session ended");
-    if (audioContext && audioContext.state !== "closed") await audioContext.close();
-    onEvent({ type: "closed" });
+      source?.disconnect();
+      muteGain?.disconnect();
+      for (const node of playbackNodes) {
+        try {
+          node.stop();
+        } catch (error) {
+          if (error.name !== "InvalidStateError") console.warn("Live audio cleanup failed:", error);
+        }
+      }
+      playbackNodes.clear();
+      mediaStream?.getTracks().forEach((track) => track.stop());
+      if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, "Voice session ended");
+      if (audioContext && audioContext.state !== "closed") await audioContext.close();
+      onEvent({ type: "closed" });
+    })();
+    return closePromise;
   };
+  const handleAbort = () => {
+    void close().catch((error) => console.warn("Live session cancellation cleanup failed:", error));
+  };
+  signal?.addEventListener("abort", handleAbort, { once: true });
 
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
+    if (signal?.aborted) {
+      mediaStream.getTracks().forEach((track) => track.stop());
+      mediaStream = null;
+      throw signal.reason || new DOMException("Sesi Gemini Live dibatalkan.", "AbortError");
+    }
     audioContext = new AudioContextClass({ sampleRate: INPUT_RATE });
     await audioContext.resume();
+    if (signal?.aborted) throw signal.reason || new DOMException("Sesi Gemini Live dibatalkan.", "AbortError");
 
     onEvent({ type: "status", message: "Menghubungkan ke Gemini Live…" });
-    const token = await requestLiveToken(apiBase, authToken);
+    const token = await requestLiveToken(apiBase, authToken, signal);
+    if (signal?.aborted) throw signal.reason || new DOMException("Sesi Gemini Live dibatalkan.", "AbortError");
     socket = new WebSocket(`${LIVE_SOCKET_ENDPOINT}?access_token=${encodeURIComponent(token)}`);
 
     await new Promise((resolve, reject) => {
-      const timeout = window.setTimeout(() => reject(new Error("Gemini Live tidak merespons saat menyiapkan sesi.")), 20000);
-      const fail = (error) => {
+      let readySettled = false;
+      const timeout = window.setTimeout(() => fail(new Error("Gemini Live tidak merespons saat menyiapkan sesi.")), 20000);
+      const settleReady = (callback, value) => {
+        if (readySettled) return;
+        readySettled = true;
         window.clearTimeout(timeout);
-        reject(error);
+        signal?.removeEventListener("abort", abortSetup);
+        callback(value);
       };
+      const fail = (error) => {
+        settleReady(reject, error);
+      };
+      const abortSetup = () => fail(signal.reason || new DOMException("Sesi Gemini Live dibatalkan.", "AbortError"));
+      signal?.addEventListener("abort", abortSetup, { once: true });
       let incomingMessages = Promise.resolve();
       socket.onopen = () => {
+        if (closed || socket.readyState !== WebSocket.OPEN) return;
         socket.send(JSON.stringify({
           setup: {
             model: `models/${LIVE_MODEL}`,
@@ -185,6 +222,7 @@ export async function startGeminiLiveSession({ apiBase, authToken, systemInstruc
         else if (!closed) onEvent({ type: "error", message: "Koneksi Gemini Live terputus. Akhiri sesi lalu coba lagi." });
       };
       const handleMessage = async (messageEvent) => {
+        if (closed) return;
         let rawMessage;
         let message;
         try {
@@ -207,8 +245,7 @@ export async function startGeminiLiveSession({ apiBase, authToken, systemInstruc
           return;
         }
         if (message.setupComplete) {
-          socketReady = true;
-          window.clearTimeout(timeout);
+          if (socketReady || readySettled) return;
           source = audioContext.createMediaStreamSource(mediaStream);
           processor = audioContext.createScriptProcessor(4096, 1, 1);
           muteGain = audioContext.createGain();
@@ -258,8 +295,9 @@ export async function startGeminiLiveSession({ apiBase, authToken, systemInstruc
           source.connect(processor);
           processor.connect(muteGain);
           muteGain.connect(audioContext.destination);
+          socketReady = true;
+          settleReady(resolve);
           onEvent({ type: "ready" });
-          resolve();
           return;
         }
 

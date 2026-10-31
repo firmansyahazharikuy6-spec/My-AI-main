@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="id">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#11131b"><title>Privasi MyAI</title><style>body{max-width:760px;margin:40px auto;padding:0 20px;font:16px/1.65 system-ui;color:#20232a}aside{padding:14px;border:1px solid #d6ad42;border-radius:12px;background:#fff8df}h1,h2{line-height:1.2}</style></head>
+<body>
+  <h1>Pemberitahuan privasi MyAI (draf)</h1>
+  <aside><strong>Belum final:</strong> Operator harus melengkapi identitas/kontak, periode retensi, praktik setiap penyedia, dan proses penghapusan serta meminta peninjauan hukum sebelum publikasi Google Play.</aside>
+  <h2>Akun dan autentikasi</h2>
+  <p>Login Google/GitHub diproses oleh Firebase Authentication. MyAI tidak meminta kata sandi Google/GitHub. Worker menerima token Firebase dan informasi akun yang diperlukan untuk mengotorisasi permintaan.</p>
+  <h2>Chat, file, dan suara</h2>
+  <p>Chat dan pengaturan disimpan di browser/perangkat dan, saat masuk, dapat disinkronkan ke Firestore. Chat dapat berisi pesan, jawaban, waktu, model, dan metadata lampiran. Saat pengguna mengirim permintaan AI, prompt, konteks percakapan, instruksi, teks hasil ekstraksi file, gambar, dan/atau data terkait dapat diteruskan melalui Cloudflare Worker ke penyedia AI yang dipilih.</p>
+  <p>File dipilih dan diproses di perangkat. Isi file dikirim hanya bila diperlukan untuk permintaan yang pengguna kirim. Audio transkripsi dikirim melalui Worker ke Groq. Suara Gemini Live mengirim audio mikrofon langsung ke Google; mode kamera hanya tersedia pada web dan dapat mengirim frame kamera. Aplikasi Android ini meminta mikrofon, tetapi tidak meminta izin kamera.</p>
+  <h2>Penyedia dan integrasi</h2>
+  <p>Permintaan chat dapat diproses oleh Google Gemini, Groq, OpenRouter, atau NVIDIA NIM. Fitur opsional dapat memakai Cloudflare/Turnstile, Pollinations, Monid, Explorium, Canva, atau Resend sesuai konfigurasi deployment dan pilihan pengguna. Praktik retensi, pemrosesan, dan penggunaan data setiap penyedia mengikuti kebijakan penyedia tersebut; detail aktual per deployment masih harus diverifikasi operator.</p>
+  <h2>Data operasional, penyimpanan, dan kontrol</h2>
+  <p>Cloudflare menangani trafik Pages/Worker. Penggunaan tamu dapat memakai alamat IP dan identifier perangkat acak untuk pembatasan percobaan. Browser dapat menyimpan chat lokal, draft, preferensi, pilihan model, bahasa/tema, dan identifier tamu. Data chat akun disimpan di Firestore sesuai konfigurasi proyek.</p>
+  <p>Retensi, wilayah pemrosesan, backup, dan jadwal penghapusan lintas penyedia belum ditetapkan di repositori. Saat ini belum ada alur penghapusan akun menyeluruh di dalam aplikasi. Membersihkan data lokal tidak menghapus data cloud atau data yang sudah dikirim kepada penyedia.</p>
+  <h2>Hak, kontak, dan penghapusan</h2>
+  <p>Sebelum rilis, operator wajib menambahkan identitas legal, alamat kontak privasi/dukungan, dasar dan masa retensi, mekanisme permintaan akses serta penghapusan akun/data cloud, dan penjelasan transfer lintas negara. Draf ini bukan pengganti peninjauan hukum.</p>
+  <p><a href="./terms.html">Ketentuan layanan</a></p>
+</body>
+</html>

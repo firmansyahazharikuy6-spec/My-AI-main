@@ -16,7 +16,7 @@ test("usage tracker accumulates conversation, tab-session, and daily totals", ()
   const tracker = createUsageTracker({ local, session, now: () => Date.UTC(2026, 0, 2) });
 
   tracker.trackTokenUsage("gateway-groq", "llama", 12, 8, "chat-1");
-  tracker.trackTokenUsage("gemini", "flash", 5, 7, "chat-1");
+  tracker.trackTokenUsage("openrouter", "google/gemma-free", 5, 7, "chat-1");
   const snapshot = tracker.getSnapshot("chat-1");
 
   assert.equal(snapshot.conversation.totalTokens, 32);
@@ -31,7 +31,7 @@ test("daily usage rolls over while tab-session usage remains available", () => {
   const session = createStorage();
   let timestamp = new Date(2026, 0, 2, 12).getTime();
   const tracker = createUsageTracker({ local, session, now: () => timestamp });
-  tracker.trackTokenUsage("gemini", "flash", 6, 4, "chat-3");
+  tracker.trackTokenUsage("openrouter", "google/gemma-free", 6, 4, "chat-3");
 
   timestamp += 24 * 60 * 60 * 1000;
   const snapshot = tracker.getSnapshot("chat-3");
@@ -85,6 +85,24 @@ test("provider health supports idle, switching, and red error states", () => {
   assert.equal(tracker.getHealth().openrouter.latencyMs, 900);
 });
 
+test("Gemini Live health is retained independently from chat providers", () => {
+  const tracker = createUsageTracker({ local: createStorage(), session: createStorage(), now: () => 2000 });
+  tracker.markProviderStatus("gemini-live", "HEALTHY", { detail: "Live session token issued." });
+  assert.equal(tracker.getHealth()["gemini-live"].status, "HEALTHY");
+  assert.equal(tracker.getHealth()["gemini-live"].detail, "Live session token issued.");
+  assert.equal(tracker.getHealth().gemini, undefined);
+});
+
+test("removed provider health is discarded during storage sanitization", () => {
+  const local = createStorage();
+  local.setItem("myai_usage_tracker_v1", JSON.stringify({
+    version: 1,
+    health: { huggingface: { status: "EXHAUSTED", detail: "HTTP 402" } },
+  }));
+  const tracker = createUsageTracker({ local, session: createStorage(), now: () => 2000 });
+  assert.equal(tracker.getHealth().huggingface, undefined);
+});
+
 test("provider health persists bounded token throughput telemetry", () => {
   const local = createStorage();
   const tracker = createUsageTracker({ local, session: createStorage(), now: () => 2000 });
@@ -122,15 +140,68 @@ test("unreachable provider state persists and malformed telemetry is normalized"
   assert.equal(JSON.parse(local.getItem("myai_usage_tracker_v1")).days.invalid, undefined);
 });
 
+test("unsupported legacy providers are removed from health and usage totals", () => {
+  const local = createStorage();
+  const session = createStorage();
+  const retained = {
+    promptTokens: 4,
+    completionTokens: 2,
+    totalTokens: 6,
+    models: { llama: { promptTokens: 4, completionTokens: 2, totalTokens: 6 } },
+  };
+  const retired = {
+    promptTokens: 90,
+    completionTokens: 90,
+    totalTokens: 180,
+    models: { legacy: { promptTokens: 90, completionTokens: 90, totalTokens: 180 } },
+  };
+  const totals = (providers) => ({
+    promptTokens: 94,
+    completionTokens: 92,
+    totalTokens: 186,
+    providers,
+  });
+  local.setItem("myai_usage_tracker_v1", JSON.stringify({
+    version: 1,
+    days: { "2026-01-02": totals({ groq: retained, "retired-provider": retired }) },
+    conversations: { chat: totals({ groq: retained, "retired-provider": retired }) },
+    health: {
+      groq: { status: "HEALTHY", updatedAt: 2000 },
+      "retired-provider": { status: "ERROR", updatedAt: 2000 },
+      unknown: { status: "ERROR", updatedAt: 2000 },
+    },
+  }));
+  session.setItem("myai_usage_session_v1", JSON.stringify({
+    version: 1,
+    totals: totals({ groq: retained, "retired-provider": retired }),
+  }));
+
+  const tracker = createUsageTracker({
+    local,
+    session,
+    now: () => new Date(2026, 0, 2, 12).getTime(),
+  });
+  tracker.sanitizeStorage();
+
+  const snapshot = tracker.getSnapshot("chat");
+  assert.equal(snapshot.daily.totalTokens, 6);
+  assert.equal(snapshot.conversation.totalTokens, 6);
+  assert.equal(snapshot.session.totalTokens, 6);
+  assert.deepEqual(Object.keys(snapshot.health), ["groq"]);
+  assert.equal(snapshot.health.groq.status, "HEALTHY");
+  assert.doesNotMatch(local.getItem("myai_usage_tracker_v1"), /retired-provider|unknown/);
+  assert.doesNotMatch(session.getItem("myai_usage_session_v1"), /retired-provider/);
+});
+
 test("reset clears usage counters but preserves provider health", () => {
   const tracker = createUsageTracker({ local: createStorage(), session: createStorage() });
-  tracker.trackTokenUsage("gemini", "flash", 10, 4, "chat");
-  tracker.markProviderStatus("gemini", "DEGRADED");
+  tracker.trackTokenUsage("openrouter", "google/gemma-free", 10, 4, "chat");
+  tracker.markProviderStatus("openrouter", "DEGRADED");
   tracker.resetCounters();
   const snapshot = tracker.getSnapshot("chat");
 
   assert.equal(snapshot.daily.totalTokens, 0);
   assert.equal(snapshot.session.totalTokens, 0);
   assert.equal(snapshot.conversation.totalTokens, 0);
-  assert.equal(snapshot.health.gemini.status, "DEGRADED");
+  assert.equal(snapshot.health.openrouter.status, "DEGRADED");
 });

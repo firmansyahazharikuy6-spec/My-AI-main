@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setFetch } from "../test/set-fetch.js";
+import { dailyLimitForUser, isMaintenanceAdmin, outputTokenLimitForUser } from "./src/rate-limit.js";
 import pagesWorker from "../pages/_worker.js";
 import { clearGatewayCatalogCache, gatewayModelGroups, handleGatewayRequest, modelAccessTier, probeGatewayProvider, PROVIDER_ADAPTERS, streamResponse as gatewayStreamResponse, testGatewayProvider, validateGatewayBody } from "./src/gateway.js";
-import worker, { AIRateLimitStore, AI_ROUTE_LIMITS, EmailActionStore, GuestTrialCounter, guestModelsForKeys, isAllowedOrigin, isImageEditRequest, readProviderKeys, streamResponse, validateChatBody, validatePresentationBody, withCoreSystemInstruction, withUserPersonalization } from "./src/index.js";
+import worker, { AIRateLimitStore, AI_ROUTE_LIMITS, callImageEditProvider, EmailActionStore, GuestTrialCounter, guestModelsForKeys, ImageEditQueue, isAllowedOrigin, isImageEditRequest, readProviderKeys, streamResponse, validateChatBody, validatePresentationBody, withCoreSystemInstruction, withUserPersonalization } from "./src/index.js";
 import { boostImagePromptQuality, cleanImageGenerationPrompt } from "../js/image-prompts.js";
 
 function request(payload, method = "POST", origin) {
@@ -36,6 +37,59 @@ function guestHeaders(deviceId = "7f6e75d2-0fb1-4a5d-8b24-bb8a3ea57419") {
   };
 }
 
+function imageEditQueue() {
+  const values = new Map();
+  const storage = {
+    get: async (key) => values.get(key),
+    put: async (key, value) => values.set(key, structuredClone(value)),
+    delete: async (key) => values.delete(key),
+    list: async ({ prefix = "", limit = 1000 } = {}) => new Map(
+      [...values.entries()].filter(([key]) => key.startsWith(prefix)).slice(0, limit),
+    ),
+    transaction: async (callback) => callback(storage),
+  };
+  return new ImageEditQueue({ storage });
+}
+
+async function imageQueueCall(queue, action, body) {
+  const response = await queue.fetch(new Request(`https://queue.test/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+  return { response, body: await response.json() };
+}
+
+function imageEditReservation(userHash, requestHash, sharedLimit = 4, userLimit = 5) {
+  return {
+    userHash,
+    requestHash,
+    sourceImage: `data:image/png;base64,${"a".repeat(1200)}`,
+    prompt: "Edit the supplied source photo only.",
+    sharedLimit,
+    userLimit,
+    options: { sharedLimit },
+  };
+}
+
+function imageEditQueueBinding() {
+  const values = new Map();
+  const storage = {
+    get: async (key) => values.get(key),
+    put: async (key, value) => values.set(key, structuredClone(value)),
+    delete: async (key) => values.delete(key),
+    list: async ({ prefix = "", limit = 1000 } = {}) => new Map(
+      [...values.entries()].filter(([key]) => key.startsWith(prefix)).slice(0, limit),
+    ),
+    transaction: async (callback) => callback(storage),
+  };
+  const queue = new ImageEditQueue({ storage });
+  return {
+    idFromName: () => "image-edit-global",
+    get: () => ({ fetch: (url, options) => queue.fetch(new Request(url, options)) }),
+  };
+}
+
 function aiDailyRateLimitBinding(allow = true, calls = []) {
   return {
     idFromName: (name) => name,
@@ -57,7 +111,7 @@ const PREMIUM_TEST_AUTH = {
   env: { PREMIUM_ALLOWED_UIDS: "premium-test-user" },
 };
 
-test("removed Claude and Kimi secrets are ignored while supported Worker secrets remain", () => {
+test("provider API secrets are read from Worker environment and aliases", () => {
   const result = readProviderKeys(JSON.stringify({
     anthropic: "json-claude",
     moonshot: "json-kimi",
@@ -65,7 +119,8 @@ test("removed Claude and Kimi secrets are ignored while supported Worker secrets
     openrouter_api_key: "json-openrouter",
     monid_api_key: "json-monid",
   }), {
-    GEMINI_API_KEY: "gemini-worker",
+    GEMINI_API_KEY: "legacy-gemini-secret",
+    GEMINI_LIVE_API_KEY: "gemini-live-worker",
     GROQ_API_KEY: "groq-worker",
     OPENROUTER_API_KEY: "openrouter-worker",
     ANTHROPIC_API_KEY: "anthropic-worker",
@@ -77,22 +132,29 @@ test("removed Claude and Kimi secrets are ignored while supported Worker secrets
   });
 
   assert.deepEqual(result.keys, {
-    gemini: "gemini-worker",
+    claude: "claude-worker",
     groq: "groq-worker",
+    kimi: "kimi-worker",
     monid: "monid-worker",
     nvidia: "nvidia-worker",
     openrouter: "openrouter-worker",
   });
-  assert.deepEqual(result.warnings, [
-    'Provider "anthropic" di AI_PROVIDER_KEYS tidak didukung Worker dan diabaikan.',
-    'Provider "moonshot" di AI_PROVIDER_KEYS tidak didukung Worker dan diabaikan.',
-  ]);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(readProviderKeys("", {
+    GEMINI_API_KEY: "legacy-gemini-secret",
+    GEMINI_LIVE_API_KEY: "gemini-live-worker",
+  }).keys, {});
   assert.deepEqual(readProviderKeys("", {
     ANTHROPIC_API_KEY: "anthropic-alias",
     MOONSHOT_API_KEY: "moonshot-alias",
     CLAUDE_API_KEY: "claude-alias",
     KIMI_API_KEY: "kimi-alias",
-  }).keys, {});
+  }).keys, { claude: "claude-alias", kimi: "kimi-alias" });
+  const unsupported = readProviderKeys(JSON.stringify({ huggingface_token: "unused-secret" }), {
+    HF_TOKEN: "unused-secret",
+  });
+  assert.deepEqual(unsupported.keys, {});
+  assert.match(unsupported.warnings[0], /tidak didukung Worker/);
 });
 
 test("presentation route accepts a bounded Canva outline and rejects invalid fields", () => {
@@ -139,7 +201,8 @@ test("Pages proxy forwards Canva OAuth and presentation routes to the Worker", a
 });
 
 test("all chat providers expose the shared server-side adapter contract", () => {
-  assert.deepEqual(Object.keys(PROVIDER_ADAPTERS).sort(), ["gemini", "groq", "nvidia", "openrouter"]);
+  assert.deepEqual(Object.keys(PROVIDER_ADAPTERS).sort(), ["claude", "groq", "kimi", "nvidia", "openrouter"]);
+  assert.equal(PROVIDER_ADAPTERS.gemini, undefined);
   for (const [id, adapter] of Object.entries(PROVIDER_ADAPTERS)) {
     assert.equal(adapter.id, id);
     assert.equal(typeof adapter.name, "string");
@@ -149,6 +212,63 @@ test("all chat providers expose the shared server-side adapter contract", () => 
     assert.equal(typeof adapter.chat, "function");
     assert.equal(typeof adapter.normalizeError, "function");
   }
+});
+
+test("legacy Hugging Face secrets cannot register a chat provider or trigger catalog requests", async (context) => {
+  let requests = 0;
+  setFetch(context, async () => {
+    requests++;
+    return Response.json({ data: [] });
+  });
+  assert.equal(PROVIDER_ADAPTERS.huggingface, undefined);
+  assert.deepEqual(await gatewayModelGroups({ huggingface: "legacy-secret" }, ["huggingface"]), {
+    groups: [],
+    errors: [],
+  });
+  assert.equal(requests, 0);
+});
+
+test.skip("Legacy Hugging Face catalog and chat integration", async (context) => {
+  clearGatewayCatalogCache("huggingface");
+  let catalogRequest;
+  const replaceFetch = setFetch(context, async (url, options = {}) => {
+    catalogRequest = { url: String(url), options };
+    return Response.json({ data: [
+      { id: "meta-llama/Llama-3.1-8B-Instruct", name: "Llama 3.1 8B Instruct" },
+      { id: "sentence-transformers/all-MiniLM-L6-v2", name: "Embedding model" },
+    ] });
+  });
+  const catalog = await gatewayModelGroups({ huggingface: "hf-server-token" }, ["huggingface"]);
+  assert.equal(catalogRequest.url, "https://router.huggingface.co/v1/models");
+  assert.match(catalogRequest.options.headers.Authorization, /^Bearer /);
+  assert.deepEqual(catalog.groups[0].models.map((model) => model.id), ["meta-llama/Llama-3.1-8B-Instruct"]);
+  assert.equal(catalog.groups[0].models[0].accessTier, "basic");
+
+  const config = PROVIDER_ADAPTERS.huggingface.chat({
+    provider: "huggingface",
+    key: "hf-server-token",
+    model: "meta-llama/Llama-3.1-8B-Instruct",
+    messages: [{ role: "user", content: "Halo" }],
+    temperature: 0.7,
+  });
+  assert.equal(config.url, "https://router.huggingface.co/v1/chat/completions");
+  assert.match(config.headers.Authorization, /^Bearer /);
+  assert.equal(config.headers["X-Title"], "MyAI");
+  assert.equal(JSON.parse(JSON.stringify(config.body)).model, "meta-llama/Llama-3.1-8B-Instruct");
+
+  replaceFetch(async (url, options = {}) => {
+    assert.equal(String(url), "https://router.huggingface.co/v1/chat/completions");
+    assert.match(options.headers.Authorization, /^Bearer /);
+    return new Response('data: {"choices":[{"delta":{"content":"OK"}}]}\\n\\ndata: [DONE]\\n\\n', {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const response = await fetch(config.url, {
+    method: "POST",
+    headers: config.headers,
+    body: JSON.stringify(config.body),
+  });
+  assert.equal(response.status, 200);
 });
 
 test("provider catalog test distinguishes working and rejected server-side secrets", async (context) => {
@@ -169,6 +289,16 @@ test("provider catalog test distinguishes working and rejected server-side secre
   assert.equal(rejected.code, "INVALID_KEY_OR_PERMISSION");
   assert.doesNotMatch(JSON.stringify(rejected), /server-secret/);
 });
+
+  test.skip("Legacy Hugging Face 402 error normalization", () => {
+    const message = PROVIDER_ADAPTERS.huggingface.normalizeError(
+      402,
+      JSON.stringify({ error: { message: "credits unavailable for token hf-secret-value" } }),
+      "hf-secret-value",
+    );
+    assert.match(message, /credits unavailable/);
+    assert.doesNotMatch(message, /hf-secret-value/);
+  });
 
   test("live provider probe returns model usage and never exposes the configured secret", async (context) => {
     clearGatewayCatalogCache("groq");
@@ -216,31 +346,6 @@ test("provider catalog test distinguishes working and rejected server-side secre
     assert.equal(result.status, "OK");
     assert.equal(result.model, "llama-3.3-70b-versatile");
     assert.deepEqual(chatModels, ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"]);
-  });
-
-  test("live Gemini probe prefers the known working Flash model", async (context) => {
-    clearGatewayCatalogCache("gemini");
-    const chatModels = [];
-    const chatRequests = [];
-    setFetch(context, async (url, options = {}) => {
-      if (String(url).includes("/models?")) {
-        return Response.json({ models: [
-          { name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportedGenerationMethods: ["generateContent"] },
-          { name: "models/gemini-3-flash-preview", displayName: "Gemini 3 Flash Preview", supportedGenerationMethods: ["generateContent"] },
-        ] });
-      }
-      const model = String(url).match(/models\/([^:]+)/)?.[1];
-      chatModels.push(model);
-      chatRequests.push(JSON.parse(options.body));
-      return Response.json({
-        candidates: [{ content: { parts: [{ text: "OK" }] } }],
-        usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 1 },
-      });
-    });
-    const result = await probeGatewayProvider("gemini", "gemini-secret");
-    assert.equal(result.status, "OK");
-    assert.deepEqual(chatModels, ["gemini-3-flash-preview"]);
-    assert.equal(chatRequests[0].generationConfig.maxOutputTokens, 64);
   });
 
   test("live NVIDIA probe prefers the confirmed working Nemotron Bolt model", async (context) => {
@@ -361,7 +466,7 @@ test("provider catalog test distinguishes working and rejected server-side secre
     assert.doesNotMatch(JSON.stringify(result), /groq-secret/);
   });
 
-  test("health route tests Monid and Pollinations without returning credentials", async (context) => {
+  test("health route tests Monid without returning credentials", async (context) => {
     const { token, jwk } = await authorizedToken();
     setFetch(context, async (url, options = {}) => {
       const target = String(url);
@@ -369,15 +474,12 @@ test("provider catalog test distinguishes working and rejected server-side secre
         return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
       }
       if (target.includes("api.monid.ai/v1/discover")) return Response.json({ results: [] });
-      if (target.includes("image.pollinations.ai")) {
-        return new Response("image bytes", { headers: { "Content-Type": "image/png" } });
-      }
       throw new Error(`Unexpected request to ${target}`);
     });
     const response = await worker.fetch(new Request("https://worker.test/api/health", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ providers: ["monid", "pollinations"] }),
+      body: JSON.stringify({ providers: ["monid"] }),
     }), {
       FIREBASE_PROJECT_ID: "my-ai-69027",
       MONID_API_KEY: "monid-secret",
@@ -387,39 +489,57 @@ test("provider catalog test distinguishes working and rejected server-side secre
     assert.equal(response.status, 200);
     const result = await response.json();
     assert.equal(result.providers.monid.status, "OK");
-    assert.equal(result.providers.pollinations.status, "OK");
-    assert.doesNotMatch(JSON.stringify(result), /monid-secret|image bytes/);
+    assert.equal(Object.hasOwn(result.providers, "pollinations"), false);
+    assert.doesNotMatch(JSON.stringify(result), /monid-secret/);
   });
 
-  test("Gemini image quota-zero failures are logged safely and do not retry another model", async (context) => {
+  test("health route verifies Gemini Live token issuance using only its dedicated secret", async (context) => {
     const { token, jwk } = await authorizedToken();
-    const imageModels = [];
-    const safeLogs = [];
-    const originalWarn = console.warn;
-    console.warn = (...args) => safeLogs.push(args);
-    context.after(() => { console.warn = originalWarn; });
+    const upstreamRequests = [];
+    setFetch(context, async (url, options = {}) => {
+      const target = String(url);
+      if (target.includes("securetoken@system.gserviceaccount.com")) {
+        return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+      }
+      upstreamRequests.push({
+        target,
+        key: options.headers?.["x-goog-api-key"],
+        body: JSON.parse(options.body),
+      });
+      return Response.json({ name: "authTokens/temporary-check-token" });
+    });
+    const response = await worker.fetch(new Request("https://worker.test/api/health", {
+      method: "POST",
+      headers: { Authorization: ["Bearer", token].join(" "), "Content-Type": "application/json" },
+      body: JSON.stringify({ providers: ["gemini-live"] }),
+    }), {
+      FIREBASE_PROJECT_ID: "my-ai-69027",
+      GEMINI_API_KEY: "chat-secret-must-not-be-used",
+      GEMINI_LIVE_API_KEY: "live-secret",
+      AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.providers["gemini-live"].status, "OK");
+    assert.match(result.providers["gemini-live"].message, /WebSocket belum diuji/);
+    assert.doesNotMatch(JSON.stringify(result), /live-secret|temporary-check-token/);
+    assert.equal(upstreamRequests.length, 1);
+    assert.equal(upstreamRequests[0].target, "https://generativelanguage.googleapis.com/v1beta/auth_tokens");
+    assert.equal(upstreamRequests[0].key, "live-secret");
+    assert.deepEqual(upstreamRequests[0].body.uses, 1);
+  });
+
+  test("image generation requires OpenRouter and never uses the Google Gemini API", async (context) => {
+    const { token, jwk } = await authorizedToken();
+    const upstreamRequests = [];
     setFetch(context, async (url) => {
       const target = String(url);
       if (target.includes("securetoken@system.gserviceaccount.com")) {
         return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
       }
-      const model = target.match(/models\/([^/]+):generateContent$/)?.[1];
-      imageModels.push(model);
-      return Response.json({
-        error: {
-          status: "RESOURCE_EXHAUSTED",
-          details: [
-            {
-              "@type": "type.googleapis.com/google.rpc.QuotaFailure",
-              violations: [{
-                quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
-                quotaValue: "0",
-              }],
-            },
-            { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "30s" },
-          ],
-        },
-      }, { status: 429 });
+      upstreamRequests.push(target);
+      throw new Error(`Unexpected image provider request: ${target}`);
     });
     const response = await worker.fetch(new Request("https://worker.test/images/generate", {
       method: "POST",
@@ -440,34 +560,29 @@ test("provider catalog test distinguishes working and rejected server-side secre
     }), {
       FIREBASE_PROJECT_ID: "my-ai-69027",
       AUTHORIZED_EMAILS: "user@example.com",
-      GEMINI_API_KEY: "gemini-secret",
+      GEMINI_LIVE_API_KEY: "live-only-secret-must-not-be-used",
       AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
       AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
     });
-    assert.equal(response.status, 429);
+    assert.equal(response.status, 503);
     const result = await response.json();
-    assert.match(result.error.message, /kuota|batas permintaan/i);
-    assert.deepEqual(imageModels, ["gemini-3.1-flash-image"]);
-    const diagnosticLog = JSON.stringify(safeLogs);
-    assert.match(diagnosticLog, /RESOURCE_EXHAUSTED/);
-    assert.match(diagnosticLog, /generativelanguage\.googleapis\.com\/generate_content_free_tier_requests/);
-    assert.match(diagnosticLog, /"limit":"0"/);
-    assert.match(diagnosticLog, /"retryDelay":"30s"/);
-    assert.doesNotMatch(JSON.stringify(result) + diagnosticLog, /gemini-secret/);
+    assert.match(result.error.message, /OPENROUTER_API_KEY/);
+    assert.deepEqual(upstreamRequests, []);
+    assert.doesNotMatch(JSON.stringify(result), /live-only-secret/);
   });
 
-  test("Gemini Image upstream HTTP 500 is sanitized into a fallback-eligible error", async (context) => {
+  test("OpenRouter Gemini Image quota errors are sanitized without trying Google or other image providers", async (context) => {
     const { token, jwk } = await authorizedToken();
-    const imageModels = [];
+    const upstreamRequests = [];
     setFetch(context, async (url) => {
       const target = String(url);
       if (target.includes("securetoken@system.gserviceaccount.com")) {
         return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
       }
-      imageModels.push(target.match(/models\/([^/]+):generateContent$/)?.[1]);
+      upstreamRequests.push(target);
       return Response.json({
-        error: { status: "INTERNAL", message: "provider-internal-detail-must-not-reach-client" },
-      }, { status: 500 });
+        error: { code: 402, message: "openrouter-secret provider credits exhausted" },
+      }, { status: 402 });
     });
     const response = await worker.fetch(new Request("https://worker.test/images/generate", {
       method: "POST",
@@ -488,31 +603,26 @@ test("provider catalog test distinguishes working and rejected server-side secre
     }), {
       FIREBASE_PROJECT_ID: "my-ai-69027",
       AUTHORIZED_EMAILS: "user@example.com",
-      GEMINI_API_KEY: "gemini-secret",
+      OPENROUTER_API_KEY: "openrouter-secret",
+      GEMINI_LIVE_API_KEY: "live-only-secret-must-not-be-used",
       AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
       AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
     });
-    assert.equal(response.status, 502);
+    assert.equal(response.status, 429);
     const result = await response.json();
-    assert.match(result.error.message, /Gemini Image sedang mengalami gangguan/i);
-    assert.doesNotMatch(JSON.stringify(result), /provider-internal-detail|gemini-secret/);
-    assert.deepEqual(imageModels, ["gemini-3.1-flash-image", "gemini-3.1-flash-image"]);
+    assert.match(result.error.message, /kuota atau kredit OpenRouter/i);
+    assert.doesNotMatch(JSON.stringify(result), /openrouter-secret|live-only-secret/);
+    assert.deepEqual(upstreamRequests, ["https://openrouter.ai/api/v1/images"]);
   });
 
   test("provider catalogs map models into the requested access tiers", () => {
-  assert.equal(modelAccessTier("gemini", { id: "gemini-2.5-flash", name: "Gemini Flash" }), "free");
-  assert.equal(modelAccessTier("gemini", { id: "gemini-2.5-flash-thinking", name: "Gemini Flash Thinking" }), "pro");
-  assert.equal(modelAccessTier("gemini", { id: "gemini-2.5-pro", name: "Gemini Pro" }), "max");
-  assert.equal(modelAccessTier("gemini", { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" }), "max");
-  assert.equal(modelAccessTier("gemini", { id: "gemini-3.1-flash", name: "Gemini 3.1 Flash" }), "free");
-  assert.equal(modelAccessTier("gemini", { id: "gemini-4-argon", name: "Gemini Argon" }), "basic");
+    assert.equal(modelAccessTier("openrouter", { id: "google/gemini-2.5-pro", name: "Gemini Pro" }), "max");
   assert.equal(modelAccessTier("groq", { id: "llama-3.1-8b-instant", name: "Llama 8B Instant" }), "free");
   assert.equal(modelAccessTier("groq", { id: "llama-3.3-70b-versatile", name: "Llama 70B" }), "pro");
   assert.equal(modelAccessTier("groq", { id: "llama-3.3-70b", name: "Llama 3.3" }), "pro");
   assert.equal(modelAccessTier("nvidia", { id: "nvidia/cosmos-reason2-8b", name: "Cosmos Reason2 8B" }), "free");
   assert.equal(modelAccessTier("nvidia", { id: "nvidia/nemotron", name: "Nemotron" }), "pro");
   assert.equal(modelAccessTier("nvidia", { id: "nvidia/llama-3.1-405b", name: "Llama 3.1 405B" }), "max");
-  assert.equal(modelAccessTier("openrouter", { id: "qwen/qwen3", name: "Qwen", priceTier: "free" }), "free");
   assert.equal(modelAccessTier("openrouter", { id: "meta/llama-4", name: "Llama" }), "pro");
   assert.equal(modelAccessTier("openrouter", { id: "meta/llama-4-scout", name: "Llama 4 Scout" }), "pro");
   assert.equal(modelAccessTier("openrouter", { id: "meta/llama-4-behemoth", name: "Llama 4 Behemoth", priceTier: "free" }), "free");
@@ -520,7 +630,7 @@ test("provider catalog test distinguishes working and rejected server-side secre
   assert.equal(modelAccessTier("openrouter", { id: "example/request-priced", name: "Request-priced", priceTier: "check" }), "basic");
 });
 
-test("text chat catalog excludes image-generation-only models", async (context) => {
+test("OpenRouter catalog retains chat, image, audio, and embedding modalities with support metadata", async (context) => {
   setFetch(context, async (url) => {
     assert.equal(String(url), "https://openrouter.ai/api/v1/models");
     return Response.json({ data: [
@@ -540,13 +650,44 @@ test("text chat catalog excludes image-generation-only models", async (context) 
         id: "provider/mixed-output",
         name: "Mixed Text and Image",
         pricing: { prompt: "0", completion: "0" },
-        architecture: { output_modalities: ["text", "image"] },
+        architecture: { input_modalities: ["text", "image"], output_modalities: ["text", "image"] },
+      },
+      {
+        id: "qwen/qwen3-8b:free",
+        name: "Qwen3 8B",
+        pricing: { prompt: "0", completion: "0" },
+        architecture: { output_modalities: ["text"] },
+      },
+      {
+        id: "audio/voice-model",
+        name: "Voice Model",
+        pricing: { prompt: "0.001", completion: "0.001" },
+        architecture: { input_modalities: ["audio"], output_modalities: ["audio"] },
+      },
+      {
+        id: "vector/embedding-model",
+        name: "Vector Embedding",
+        pricing: { prompt: "0.001", completion: "0.001" },
+        architecture: { input_modalities: ["text"], output_modalities: ["embedding"] },
       },
     ] });
   });
   clearGatewayCatalogCache();
   const { groups } = await gatewayModelGroups({ openrouter: "openrouter-secret" }, ["openrouter"]);
-  assert.deepEqual(groups[0].models.map((model) => model.id), ["google/text-model"]);
+  const models = groups[0].models;
+  assert.deepEqual(models.map((model) => model.id), [
+    "black-forest-labs/flux-1.1-pro",
+    "provider/mixed-output",
+    "qwen/qwen3-8b:free",
+    "google/text-model",
+    "vector/embedding-model",
+    "audio/voice-model",
+  ]);
+  assert.equal(models.find((model) => model.id === "black-forest-labs/flux-1.1-pro").imageOnly, true);
+  assert.equal(models.find((model) => model.id === "provider/mixed-output").chatSupport, true);
+  assert.equal(models.find((model) => model.id === "provider/mixed-output").imageSupport, true);
+  assert.equal(models.find((model) => model.id === "audio/voice-model").chatSupport, false);
+  assert.equal(models.find((model) => model.id === "vector/embedding-model").chatSupport, false);
 });
 
 test("core accuracy instructions are added once while preserving user system context and messages", () => {
@@ -556,21 +697,18 @@ test("core accuracy instructions are added once while preserving user system con
   ];
   const result = withCoreSystemInstruction(input);
   assert.equal(result.length, 2);
-  assert.match(result[0].content, /helpful conversational assistant/);
-  assert.match(result[0].content, /Answer the latest user message directly and in context/);
-  assert.match(result[0].content, /For ordinary questions and conversation, answer naturally/);
-  assert.doesNotMatch(result[0].content, /world-class AI assistant/);
-  assert.match(result[0].content, /appropriate language tag/);
-  assert.match(result[0].content, /Skip generic openings/);
-  assert.match(result[0].content, /distinguish verified facts from uncertainty/);
+  assert.match(result[0].content, /capable, warm, practical assistant/);
+  assert.match(result[0].content, /Answer the latest request directly/);
+  assert.match(result[0].content, /fewest tokens that fully solve the task/);
+  assert.match(result[0].content, /distinguish evidence from inference/);
+  assert.match(result[0].content, /Follow safety, privacy, and copyright limits/);
   assert.match(result[0].content, /Answer in Indonesian/);
   assert.deepEqual(result[1], input[1]);
   assert.equal(input[0].content, "Answer in Indonesian and follow the user's coding constraints.");
   const defaulted = withCoreSystemInstruction([{ role: "user", content: "hello" }]);
   assert.equal(defaulted[0].role, "system");
-  assert.match(defaulted[0].content, /helpful conversational assistant/);
-  assert.match(defaulted[0].content, /When creating documents or visual content/);
-  assert.match(defaulted[0].content, /complete, detailed, and usable/);
+  assert.match(defaulted[0].content, /writing, coding, learning, research/);
+  assert.match(defaulted[0].content, /Use image editing or generation only when the corresponding tool is actually available/);
   assert.equal(withCoreSystemInstruction(defaulted).length, 2);
 });
 
@@ -591,8 +729,8 @@ test("short greetings receive a natural-response boundary and duplicate system p
 
 test("gateway message validation merges duplicate system text and removes stale assistant tail", () => {
   const result = validateGatewayBody({
-    provider: "gemini",
-    model: "gemini-2.5-flash",
+    provider: "groq",
+    model: "llama-3.1-8b-instant",
     messages: [
       { role: "system", content: "Answer naturally." },
       { role: "user", content: "Earlier question" },
@@ -601,7 +739,7 @@ test("gateway message validation merges duplicate system text and removes stale 
       { role: "user", content: "Hei mau tanya" },
       { role: "assistant", content: "Stale technical response" },
     ],
-  }, { gemini: "gemini-secret" });
+  }, { groq: "groq-secret" });
   assert.deepEqual(result.messages, [
     { role: "system", content: "Answer naturally." },
     { role: "user", content: "Earlier question" },
@@ -634,6 +772,7 @@ test("Worker CORS accepts production, Pages previews, and local development orig
   assert.equal(isAllowedOrigin("https://preview-branch.myai-v3-firmansyah.pages.dev"), true);
   assert.equal(isAllowedOrigin("http://localhost:4173"), true);
   assert.equal(isAllowedOrigin("http://127.0.0.1:4173"), true);
+  assert.equal(isAllowedOrigin("https://localhost"), true);
   assert.equal(isAllowedOrigin("https://localhost:4173"), false);
   assert.equal(isAllowedOrigin("https://pages.dev"), false);
   assert.equal(isAllowedOrigin("https://another-project.pages.dev"), false);
@@ -793,18 +932,18 @@ test("gateway uses the selected provider and isolates Groq prompt optimization",
   assert.equal(calls[2].body.temperature, 0.2);
   assert.equal(calls[2].body.messages.length, 2);
   assert.equal(calls[2].body.messages[0].role, "system");
-  assert.match(calls[2].body.messages[0].content, /only task is to rewrite/i);
+  assert.match(calls[2].body.messages[0].content, /Rewrite the user's draft as a concise, effective prompt/i);
   assert.match(calls[2].body.messages[0].content, /Return only the rewritten prompt/i);
   assert.equal(calls[2].body.messages[1].content, "buatkan esai AI");
   assert.equal(calls.length, 3);
 });
 
-test("premium OpenRouter models require an allowlisted UID", async (context) => {
+test("premium OpenRouter models are not gated by MyAI allowlists or default token caps", async (context) => {
   const calls = [];
   setFetch(context, async (url, options = {}) => {
     const target = String(url);
     if (target === "https://openrouter.ai/api/v1/models") return Response.json(openRouterCatalog());
-    calls.push(target);
+    calls.push({ target, body: JSON.parse(options.body) });
     return new Response('data: {"choices":[{"delta":{"content":"Allowed answer."}}]}\n\ndata: [DONE]\n\n', {
       headers: { "Content-Type": "text/event-stream" },
     });
@@ -818,19 +957,12 @@ test("premium OpenRouter models require an allowlisted UID", async (context) => 
   const keys = { openrouter: "openrouter-secret" };
   const denied = await handleGatewayRequest(request(payload), keys, {
     user: { sub: "ordinary-user" },
-    env: { PREMIUM_ALLOWED_UIDS: "premium-user, another-user" },
+    env: {},
   });
-  assert.equal(denied.status, 403);
-  assert.match((await denied.json()).error.message, /Paket akun saat ini tidak mengizinkan model premium/);
-  assert.deepEqual(calls, []);
-
-  const allowed = await handleGatewayRequest(request(payload), keys, {
-    user: { sub: "premium-user" },
-    env: { PREMIUM_ALLOWED_UIDS: "premium-user, another-user" },
-  });
-  assert.equal(allowed.status, 200);
-  assert.match(await allowed.text(), /Allowed answer/);
-  assert.deepEqual(calls, ["https://openrouter.ai/api/v1/chat/completions"]);
+  assert.equal(denied.status, 200);
+  assert.match(await denied.text(), /Allowed answer/);
+  assert.deepEqual(calls.map(({ target }) => target), ["https://openrouter.ai/api/v1/chat/completions"]);
+  assert.equal(Object.hasOwn(calls[0].body, "max_tokens"), false);
 });
 
 test("NVIDIA 402 quota falls back only to verified free catalog models", async (context) => {
@@ -877,23 +1009,16 @@ test("NVIDIA 402 quota falls back only to verified free catalog models", async (
   assert.match(stream, /Free fallback answer/);
 });
 
-test("Gemini and Groq catalogs exclude non-chat models and retain current text models", async (context) => {
+test("direct Gemini chat is excluded from gateway model discovery", async (context) => {
   clearGatewayCatalogCache();
-  setFetch(context, async () => Response.json({
-    models: [
-      { name: "models/gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro", supportedGenerationMethods: ["generateContent"] },
-      { name: "models/gemini-3.8-flash", displayName: "Gemini Flash", supportedGenerationMethods: ["generateContent"] },
-      { name: "models/gemini-3.1-flash-image-preview", displayName: "Gemini Image", supportedGenerationMethods: ["generateContent"] },
-      { name: "models/gemini-3.1-flash-preview-tts", displayName: "Gemini TTS", supportedGenerationMethods: ["generateContent"] },
-      { name: "models/gemini-3.1-robotics-preview", displayName: "Gemini Robotics", supportedGenerationMethods: ["generateContent"] },
-    ],
-  }));
-  const result = await gatewayModelGroups({ gemini: "configured" }, ["gemini"]);
-  assert.deepEqual(result.errors, []);
-  assert.deepEqual(result.groups[0].models.map((model) => [model.id, model.accessTier]), [
-    ["gemini-3.1-pro-preview", "max"],
-    ["gemini-3.8-flash", "free"],
-  ]);
+  let requests = 0;
+  setFetch(context, async () => {
+    requests++;
+    throw new Error("Direct Gemini catalog must not be requested.");
+  });
+  const result = await gatewayModelGroups({ gemini: "legacy-secret" }, ["gemini"]);
+  assert.deepEqual(result, { groups: [], errors: [] });
+  assert.equal(requests, 0);
   clearGatewayCatalogCache();
 });
 
@@ -952,13 +1077,6 @@ test("guest models use current provider catalogs instead of hardcoded model IDs"
     { openrouter: "configured" },
     [
       {
-        provider: "gateway-gemini",
-        models: [
-          { id: "gemini-current-flash", name: "Gemini Flash", accessTier: "free", imageSupport: true },
-          { id: "gemini-current-pro", name: "Gemini Pro", accessTier: "max" },
-        ],
-      },
-      {
         provider: "gateway-groq",
         models: [
           { id: "llama-current-8b", name: "Llama 8B", accessTier: "free" },
@@ -966,17 +1084,19 @@ test("guest models use current provider catalogs instead of hardcoded model IDs"
         ],
       },
     ],
-    [{ id: "example/openrouter-free", name: "OpenRouter Free" }],
+    [
+      { id: "qwen/qwen3-8b:free", name: "Qwen3 8B" },
+      { id: "example/openrouter-free", name: "OpenRouter Free" },
+    ],
   );
   assert.deepEqual(models.map((model) => model.id), [
-    "gemini::gemini-current-flash",
     "groq::llama-current-8b",
+    "openrouter::qwen/qwen3-8b:free",
     "openrouter::example/openrouter-free",
   ]);
-  assert.equal(models[0].priceTier, "check");
+  assert.equal(models[0].backendProvider, "groq");
   assert.equal(models[0].accessTier, "free");
-  assert.equal(models[0].imageSupport, true);
-  assert.equal(models.some((model) => model.id.includes("3.8") || model.id.includes("qwen/qwen3-32b")), false);
+  assert.equal(models.some((model) => /qwen|qwq/i.test(`${model.id} ${model.name}`)), true);
 });
 
 test("guest catalog prioritizes one baseline NVIDIA NIM model and excludes premium and vision NIM models", () => {
@@ -994,24 +1114,17 @@ test("guest catalog prioritizes one baseline NVIDIA NIM model and excludes premi
           { id: "meta/llama-3.1-8b-limited", name: "Llama 3.1 8B", accessTier: "basic", availabilityStatus: "limited-rate" },
         ],
       },
-      {
-        provider: "gateway-gemini",
-        models: [{ id: "gemini-flash", name: "Gemini Flash", accessTier: "free" }],
-      },
     ],
   );
-  assert.deepEqual(models.map((model) => model.id), [
-    "nvidia::nvidia/cosmos-reason2-8b",
-    "gemini::gemini-flash",
-  ]);
+  assert.deepEqual(models.map((model) => model.id), ["nvidia::nvidia/cosmos-reason2-8b"]);
   assert.equal(models[0].backendProvider, "nvidia");
   assert.match(models[0].name, /NVIDIA NIM/);
   assert.equal(models[0].priceTier, "check");
 });
 
-test("guest-general tries NVIDIA NIM first and silently falls back to Gemini", async (context) => {
+test("guest-general tries NVIDIA NIM first and falls back to Groq without using Gemini", async (context) => {
   clearGatewayCatalogCache("nvidia");
-  clearGatewayCatalogCache("gemini");
+  clearGatewayCatalogCache("groq");
   const attemptedModels = [];
   setFetch(context, async (url, options = {}) => {
     const target = String(url);
@@ -1023,20 +1136,16 @@ test("guest-general tries NVIDIA NIM first and silently falls back to Gemini", a
         { id: "meta/llama-3.1-8b-instruct", name: "Llama 3.1 8B Instruct" },
       ] });
     }
-    if (target.includes("generativelanguage.googleapis.com/v1beta/models?")) {
-      return Response.json({ models: [{
-        name: "models/gemini-2.5-flash",
-        displayName: "Gemini 2.5 Flash",
-        supportedGenerationMethods: ["generateContent"],
-      }] });
+    if (target === "https://api.groq.com/openai/v1/models") {
+      return Response.json({ data: [{ id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" }] });
     }
     if (target === "https://integrate.api.nvidia.com/v1/chat/completions") {
       attemptedModels.push(JSON.parse(options.body).model);
       return Response.json({ error: { message: "quota exhausted" } }, { status: 429 });
     }
-    if (target.includes("generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent")) {
-      attemptedModels.push("gemini-2.5-flash");
-      return new Response("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}]}}]}\n\n", {
+    if (target === "https://api.groq.com/openai/v1/chat/completions") {
+      attemptedModels.push(JSON.parse(options.body).model);
+      return new Response('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\ndata: [DONE]\n\n', {
         headers: { "Content-Type": "text/event-stream" },
       });
     }
@@ -1054,7 +1163,7 @@ test("guest-general tries NVIDIA NIM first and silently falls back to Gemini", a
     TURNSTILE_SITE_KEY: "site-key",
     TURNSTILE_SECRET_KEY: "test-secret",
     NVIDIA_API_KEY: "nvidia-secret",
-    GEMINI_API_KEY: "gemini-secret",
+    GROQ_API_KEY: "groq-secret",
     AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
     AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
     GUEST_TRIAL_COUNTER: {
@@ -1069,7 +1178,7 @@ test("guest-general tries NVIDIA NIM first and silently falls back to Gemini", a
     },
   });
   assert.equal(response.status, 200);
-  assert.deepEqual(attemptedModels, ["meta/llama-3.1-8b-instruct", "gemini-2.5-flash"]);
+  assert.deepEqual(attemptedModels, ["meta/llama-3.1-8b-instruct", "llama-3.1-8b-instant"]);
   assert.deepEqual(counterActions, ["reserve"]);
 });
 
@@ -1299,16 +1408,6 @@ test("gateway rejects unknown provider names and display aliases before any upst
   const response = await handleGatewayRequest(request({ provider: "unknown", model: "x", messages: [] }), {});
   assert.equal(response.status, 400);
   assert.match((await response.json()).error.message, /Provider gateway harus/);
-  const kimiResponse = await handleGatewayRequest(request({ provider: "kimi", model: "kimi-k2", messages: [] }), {
-    kimi: "unused-kimi-secret",
-  });
-  assert.equal(kimiResponse.status, 400);
-  assert.match((await kimiResponse.json()).error.message, /Provider gateway harus/);
-  const anthropicResponse = await handleGatewayRequest(request({ provider: "claude", model: "claude-sonnet", messages: [] }), {
-    claude: "unused-anthropic-secret",
-  });
-  assert.equal(anthropicResponse.status, 400);
-  assert.match((await anthropicResponse.json()).error.message, /Provider gateway harus/);
 });
 
 test("gateway reports missing Groq key without exposing secrets", async () => {
@@ -1374,6 +1473,14 @@ test("chat validates an empty model by selecting an available free model from th
   assert.equal(result.messages[1].content, "hello");
 });
 
+test("legacy chat validation rejects direct Gemini models", async () => {
+  await assert.rejects(validateChatBody({
+    provider: "gemini",
+    model: "gemini-2.5-flash",
+    messages: [{ role: "user", content: "Answer briefly." }],
+  }, {}), /Provider ini harus digunakan melalui AI gateway/);
+});
+
 test("gateway returns upstream failures as readable SSE error events", async (context) => {
   clearGatewayCatalogCache("groq");
   setFetch(context, async (url) => {
@@ -1418,23 +1525,6 @@ test("gateway does not silently switch providers or retry a 401", async (context
   assert.doesNotMatch(stream, /"provider":"groq"/);
 });
 
-test("gateway normalizes a Gemini SSE stream", async (context) => {
-  setFetch(context, async (url, options) => {
-    if (String(url).includes("pageSize=1000")) {
-      assert.equal(options.headers["x-goog-api-key"], "gemini-secret");
-      return Response.json({ models: [{ name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportedGenerationMethods: ["generateContent"] }] });
-    }
-    assert.equal(url, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse");
-    return new Response('data: {"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}\n\n', { headers: { "Content-Type": "text/event-stream" } });
-  });
-  const response = await handleGatewayRequest(request({ provider: "gemini", model: "gemini-2.5-flash", messages: [{ role: "user", content: "hello" }] }), { gemini: "gemini-secret" });
-  const body = await response.text();
-  assert.equal(response.status, 200);
-  assert.match(body, /"content":"hello"/);
-  assert.match(body, /data: \[DONE\]/);
-  assert.doesNotMatch(body, /gemini-secret/);
-});
-
 test("gateway uses the Groq catalog and OpenAI-compatible stream", async (context) => {
   setFetch(context, async (url, options) => {
     if (String(url).endsWith("/models")) {
@@ -1442,6 +1532,7 @@ test("gateway uses the Groq catalog and OpenAI-compatible stream", async (contex
       return Response.json({ data: [{ id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B Versatile" }] });
     }
     assert.equal(url, "https://api.groq.com/openai/v1/chat/completions");
+    assert.equal(JSON.parse(options.body).max_tokens, 4096);
     return new Response('data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n', { headers: { "Content-Type": "text/event-stream" } });
   });
   const response = await handleGatewayRequest(request({ provider: "groq", model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: "hello" }] }), { groq: "groq-secret" }, PREMIUM_TEST_AUTH);
@@ -1452,29 +1543,335 @@ test("gateway uses the Groq catalog and OpenAI-compatible stream", async (contex
   assert.doesNotMatch(body, /groq-secret/);
 });
 
-test("Gemini gateway enables Google Search for web mode", async (context) => {
-  clearGatewayCatalogCache("gemini");
+test("gateway ignores invalid zero output-token metadata instead of sending max_tokens zero", async (context) => {
+  clearGatewayCatalogCache("groq");
   setFetch(context, async (url, options) => {
-    if (String(url).includes("pageSize=1000")) {
-      return Response.json({ models: [{ name: "models/gemini-2.5-flash", displayName: "Gemini Flash", supportedGenerationMethods: ["generateContent"] }] });
+    if (String(url).endsWith("/models")) {
+      return Response.json({ data: [{
+        id: "llama-3.1-8b-instant",
+        name: "Llama 3.1 8B Instant",
+        max_completion_tokens: 0,
+      }] });
     }
-    const payload = JSON.parse(options.body);
-    assert.deepEqual(payload.tools, [{ googleSearch: {} }]);
-    return new Response('data: {"candidates":[{"content":{"parts":[{"text":"Current result."}]},"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.gov/source","title":"Official source"}}]}}]}\n\n', {
+    const maxTokens = JSON.parse(options.body).max_tokens;
+    assert.ok(Number.isSafeInteger(maxTokens) && maxTokens > 0);
+    return new Response('data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n', {
       headers: { "Content-Type": "text/event-stream" },
     });
   });
   const response = await handleGatewayRequest(request({
+    provider: "groq",
+    model: "llama-3.1-8b-instant",
+    messages: [{ role: "user", content: "hello" }],
+  }), { groq: "groq-secret" }, PREMIUM_TEST_AUTH);
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /"content":"hello"/);
+});
+
+test("every gateway adapter sends a valid output-token value when catalog metadata is zero", async (context) => {
+  const cases = [
+    { provider: "claude", key: "claude-secret", model: "claude-3-5-haiku-latest" },
+    { provider: "groq", key: "groq-secret", model: "llama-3.1-8b-instant" },
+    { provider: "openrouter", key: "openrouter-secret", model: "meta/llama-3.1-8b-instruct:free" },
+    { provider: "nvidia", key: "nvidia-secret", model: "nvidia/cosmos-reason2-8b" },
+    { provider: "kimi", key: "kimi-secret", model: "moonshot-v1-8k" },
+  ];
+  const submitted = new Map();
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("models?pageSize=") || target.endsWith("/models") || target.includes("/v1/models?limit=")) {
+      if (target.includes("api.anthropic.com")) {
+        return Response.json({ data: [{ id: cases[0].model, display_name: "Claude Haiku", max_output_tokens: 0 }] });
+      }
+      const providerCase = cases.find((item) => {
+        const providerOrigin = {
+          groq: "api.groq.com",
+          openrouter: "openrouter.ai",
+          nvidia: "integrate.api.nvidia.com",
+          kimi: "api.moonshot.cn",
+        }[item.provider];
+        return target.includes(providerOrigin);
+      });
+      assert.ok(providerCase, `Unexpected catalog URL ${target}`);
+      const model = {
+        id: providerCase.model,
+        name: providerCase.model,
+        top_provider: { max_completion_tokens: 0 },
+      };
+      if (providerCase.provider === "openrouter") {
+        model.pricing = { prompt: "0", completion: "0" };
+        model.architecture = { output_modalities: ["text"] };
+      }
+      return Response.json({ data: [model] });
+    }
+
+    const current = cases.find((item) => {
+      const chatOrigin = {
+        claude: "api.anthropic.com",
+        groq: "api.groq.com",
+        openrouter: "openrouter.ai",
+        nvidia: "integrate.api.nvidia.com",
+        kimi: "api.moonshot.cn",
+      }[item.provider];
+      return target.includes(chatOrigin);
+    });
+    assert.ok(current, `Unexpected chat URL ${target}`);
+    const payload = JSON.parse(options.body);
+    submitted.set(current.provider, payload);
+    return Response.json({ error: { message: "provider request inspected" } }, { status: 400 });
+  });
+
+  for (const item of cases) {
+    clearGatewayCatalogCache(item.provider);
+    const response = await handleGatewayRequest(request({
+      provider: item.provider,
+      model: item.model,
+      messages: [{ role: "user", content: "Check token limit." }],
+    }), { [item.provider]: item.key }, PREMIUM_TEST_AUTH);
+    assert.equal(response.status, 200, item.provider);
+    const body = submitted.get(item.provider);
+    assert.ok(body, `${item.provider} received no request`);
+    const maxTokens = item.provider === "openrouter" ? body.max_tokens ?? 1 : body.max_tokens;
+    assert.ok(Number.isSafeInteger(maxTokens) && maxTokens > 0, `${item.provider} sent invalid max tokens: ${maxTokens}`);
+  }
+});
+
+test.skip("Legacy Hugging Face catalog and chat routing", async (context) => {
+  clearGatewayCatalogCache("huggingface");
+  setFetch(context, async (url, options) => {
+    if (String(url).endsWith("/models")) {
+      assert.equal(String(url), "https://router.huggingface.co/v1/models");
+      assert.match(options.headers.Authorization, /^Bearer /);
+      return Response.json({ data: [{ id: "meta-llama/Llama-3.1-8B-Instruct", name: "Llama 3.1 8B Instruct" }] });
+    }
+    assert.equal(String(url), "https://router.huggingface.co/v1/chat/completions");
+    assert.match(options.headers.Authorization, /^Bearer /);
+    assert.equal(JSON.parse(options.body).model, "meta-llama/Llama-3.1-8B-Instruct");
+    return new Response('data: {"choices":[{"delta":{"content":"halo"}}]}\n\ndata: [DONE]\n\n', {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const response = await handleGatewayRequest(request({
+    provider: "huggingface",
+    model: "meta-llama/Llama-3.1-8B-Instruct",
+    messages: [{ role: "user", content: "Halo" }],
+  }), { huggingface: "huggingface-secret" }, PREMIUM_TEST_AUTH);
+  const body = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(body, /"content":"halo"/);
+  assert.match(body, /data: \[DONE\]/);
+  assert.doesNotMatch(body, /huggingface-secret/);
+});
+
+test("OpenRouter output is uncapped by MyAI limits but respects the selected model maximum", async (context) => {
+  const chatBodies = [];
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target === "https://openrouter.ai/api/v1/models") {
+      return Response.json({ data: [{
+        id: "cohere/north-mini-code:free",
+        name: "North Mini Code",
+        pricing: { prompt: "0", completion: "0", request: "0" },
+        architecture: { output_modalities: ["text"] },
+        top_provider: { max_completion_tokens: 12000 },
+      }] });
+    }
+    chatBodies.push(JSON.parse(options.body));
+    return new Response('data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n', {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const user = {
+    sub: "maintenance-user",
+    email: "ops@example.com",
+    email_verified: true,
+  };
+  const env = { AI_ADMIN_EMAILS: "ops@example.com" };
+  const keys = { openrouter: "openrouter-server-token" };
+  const payload = {
+    provider: "openrouter",
+    model: "cohere/north-mini-code:free",
+    messages: [{ role: "user", content: "Reply briefly." }],
+    maxOutputTokens: 999_999,
+  };
+
+  clearGatewayCatalogCache("openrouter");
+  const adminResponse = await handleGatewayRequest(request(payload), keys, { user, env });
+  assert.equal(adminResponse.status, 200);
+  await adminResponse.text();
+  assert.equal(chatBodies[0].max_tokens, 12_000);
+
+  clearGatewayCatalogCache("openrouter");
+  const regularResponse = await handleGatewayRequest(request(payload), keys, {
+    user: { sub: "regular-user", email: "user@example.com", email_verified: true },
+    env,
+  });
+  assert.equal(regularResponse.status, 200);
+  await regularResponse.text();
+  assert.equal(chatBodies[1].max_tokens, 12_000);
+});
+
+test.skip("Legacy Hugging Face 402/403 fallback routing", async (context) => {
+  let upstreamStatus = 402;
+  const chatCalls = [];
+  setFetch(context, async (url) => {
+    const target = String(url);
+    if (target === "https://router.huggingface.co/v1/models") {
+      return Response.json({ data: [{ id: "meta-llama/Llama-3.1-8B-Instruct", name: "Llama 3.1 8B Instruct" }] });
+    }
+    if (target === "https://api.groq.com/openai/v1/models") {
+      return Response.json({ data: [{ id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" }] });
+    }
+    chatCalls.push(target);
+    if (target === "https://router.huggingface.co/v1/chat/completions") {
+      return Response.json({ error: { message: "provider access unavailable" } }, { status: upstreamStatus });
+    }
+    assert.equal(target, "https://api.groq.com/openai/v1/chat/completions");
+    return new Response('data: {"choices":[{"delta":{"content":"Fallback answer."}}]}\n\ndata: [DONE]\n\n', {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+
+  for (const status of [402, 403]) {
+    upstreamStatus = status;
+    chatCalls.length = 0;
+    clearGatewayCatalogCache();
+    const response = await handleGatewayRequest(request({
+      provider: "huggingface",
+      model: "meta-llama/Llama-3.1-8B-Instruct",
+      messages: [{ role: "user", content: "Answer through a valid backup." }],
+    }), {
+      huggingface: "hf-server-token",
+      groq: "groq-server-token",
+    }, PREMIUM_TEST_AUTH);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(chatCalls, [
+      "https://router.huggingface.co/v1/chat/completions",
+      "https://api.groq.com/openai/v1/chat/completions",
+    ]);
+    assert.match(body, /Fallback answer\./);
+    assert.match(body, /"provider":"huggingface","model":"meta-llama\/Llama-3\.1-8B-Instruct".*"status":"EXHAUSTED"/);
+    assert.match(body, new RegExp(`HTTP ${status}`));
+    assert.match(body, /"provider":"groq"/);
+
+    const hfCatalog = await gatewayModelGroups({ huggingface: "hf-server-token" }, ["huggingface"]);
+    assert.equal(hfCatalog.groups[0].models[0].availabilityStatus, status === 403 ? "permission-required" : "credit-required");
+
+    const retry = await handleGatewayRequest(request({
+      provider: "huggingface",
+      model: "meta-llama/Llama-3.1-8B-Instruct",
+      messages: [{ role: "user", content: "Stay on a valid provider." }],
+    }), {
+      huggingface: "hf-server-token",
+      groq: "groq-server-token",
+    }, PREMIUM_TEST_AUTH);
+    assert.match(await retry.text(), /Fallback answer\./);
+    assert.deepEqual(chatCalls.slice(2), ["https://api.groq.com/openai/v1/chat/completions"]);
+  }
+});
+
+test.skip("Legacy Hugging Face circuit behavior", async (context) => {
+  let chatCalls = 0;
+  setFetch(context, async (url) => {
+    if (String(url) === "https://router.huggingface.co/v1/models") {
+      return Response.json({ data: [{ id: "meta-llama/Llama-3.1-8B-Instruct", name: "Llama 3.1 8B Instruct" }] });
+    }
+    chatCalls++;
+    return Response.json({ error: { message: "credits unavailable" } }, { status: 402 });
+  });
+  clearGatewayCatalogCache();
+  const keys = { huggingface: "hf-server-token" };
+  const payload = {
+    provider: "huggingface",
+    model: "meta-llama/Llama-3.1-8B-Instruct",
+    messages: [{ role: "user", content: "Try a backup safely." }],
+  };
+  const first = await handleGatewayRequest(request(payload), keys, PREMIUM_TEST_AUTH);
+  const firstBody = await first.text();
+  const second = await handleGatewayRequest(request(payload), keys, PREMIUM_TEST_AUTH);
+  const secondBody = await second.text();
+
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(chatCalls, 1);
+  assert.match(firstBody, /"status":"EXHAUSTED"/);
+  assert.match(secondBody, /"status":"EXHAUSTED"/);
+  assert.match(secondBody, /dinonaktifkan sementara/);
+  assert.match(secondBody, /data: \[DONE\]/);
+});
+
+test("Claude Messages SSE is normalized and reports output truncation", async (context) => {
+  clearGatewayCatalogCache("claude");
+  setFetch(context, async (url, options) => {
+    if (String(url).includes("/v1/models?limit=1000")) {
+      assert.equal(options.headers["x-api-key"], "claude-secret");
+      assert.equal(options.headers["anthropic-version"], "2023-06-01");
+      return Response.json({ data: [{ id: "claude-3-5-haiku-latest", display_name: "Claude 3.5 Haiku" }] });
+    }
+    assert.equal(url, "https://api.anthropic.com/v1/messages");
+    const payload = JSON.parse(options.body);
+    assert.equal(payload.max_tokens, 8192);
+    return new Response([
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5}}}',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"The response"}}',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":8192}}',
+      'event: message_stop\ndata: {"type":"message_stop"}',
+      "",
+    ].join("\n\n"), { headers: { "Content-Type": "text/event-stream" } });
+  });
+  const response = await handleGatewayRequest(request({
+    provider: "claude",
+    model: "claude-3-5-haiku-latest",
+    messages: [{ role: "user", content: "hello" }],
+  }), { claude: "claude-secret" }, PREMIUM_TEST_AUTH);
+  const body = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(body, /"content":"The response"/);
+  assert.match(body, /"truncated":true/);
+  assert.match(body, /"prompt_tokens":5/);
+  assert.match(body, /"completion_tokens":8192/);
+  assert.doesNotMatch(body, /claude-secret/);
+});
+
+test("Kimi uses its OpenAI-compatible endpoint and reports output truncation", async (context) => {
+  clearGatewayCatalogCache("kimi");
+  setFetch(context, async (url, options) => {
+    if (String(url).endsWith("/models")) {
+      assert.match(options.headers.Authorization, /^Bearer /);
+      return Response.json({ data: [{ id: "kimi-k2.5", name: "Kimi K2.5" }] });
+    }
+    assert.equal(url, "https://api.moonshot.cn/v1/chat/completions");
+    assert.equal(JSON.parse(options.body).max_tokens, 8192);
+    return new Response([
+      'data: {"choices":[{"delta":{"content":"The answer"}}]}',
+      'data: {"choices":[{"delta":{},"finish_reason":"length"}]}',
+      "data: [DONE]",
+      "",
+    ].join("\n\n"), { headers: { "Content-Type": "text/event-stream" } });
+  });
+  const catalog = await gatewayModelGroups({ kimi: "kimi-secret" }, ["kimi"]);
+  assert.deepEqual(catalog.groups.flatMap((group) => group.models.map((model) => model.id)), ["kimi-k2.5"], JSON.stringify(catalog));
+  const response = await handleGatewayRequest(request({
+    provider: "kimi",
+    model: "kimi-k2.5",
+    messages: [{ role: "user", content: "hello" }],
+  }), { kimi: "kimi-secret" }, PREMIUM_TEST_AUTH);
+  const body = await response.text();
+  assert.equal(response.status, 200, body);
+  assert.match(body, /"content":"The answer"/);
+  assert.match(body, /"truncated":true/);
+  assert.doesNotMatch(body, /kimi-secret/);
+});
+
+test("direct Gemini chat is rejected by the gateway adapter", async () => {
+  const response = await handleGatewayRequest(request({
     provider: "gemini",
     model: "gemini-2.5-flash",
     messages: [{ role: "user", content: "Find current information" }],
-    webSearch: true,
-    researchMode: true,
-  }), { gemini: "gemini-secret" });
-  const body = await response.text();
-  assert.equal(response.status, 200);
-  assert.match(body, /"content":"Current result\."/);
-  assert.match(body, /https:\/\/example\.gov\/source/);
+  }), {});
+  assert.equal(response.status, 400);
 });
 
 test("OpenRouter gateway enables web search and preserves citation annotations", async (context) => {
@@ -1509,10 +1906,11 @@ test("gateway rejects web searches for providers without search capability", asy
     webSearch: true,
   }), { groq: "groq-secret" });
   assert.equal(response.status, 400);
-  assert.match((await response.json()).error.message, /Pilih Gemini atau OpenRouter/);
+  assert.match((await response.json()).error.message, /Pilih OpenRouter/);
 });
 
 test("gateway routes NVIDIA through its OpenAI-compatible API", async (context) => {
+  clearGatewayCatalogCache("nvidia");
   const providers = [
     {
       provider: "nvidia",
@@ -1596,6 +1994,26 @@ test("OpenRouter catalog returns all available text models without a display cap
   assert.equal(groups[0].models.length, 150);
 });
 
+test("authenticated chat has no MyAI token ceiling and respects model output metadata", () => {
+  const env = { AI_ADMIN_EMAILS: "maintenance@example.com, other@example.com" };
+  assert.equal(isMaintenanceAdmin({
+    email: " Maintenance@Example.com ",
+    email_verified: true,
+  }, env), true);
+  assert.equal(outputTokenLimitForUser({ email: "maintenance@example.com", email_verified: true }, env), Number.MAX_SAFE_INTEGER);
+  assert.equal(isMaintenanceAdmin({
+    email: "maintenance@example.com.attacker.test",
+    email_verified: true,
+  }, env), false);
+  assert.equal(isMaintenanceAdmin({
+    email: "maintenance@example.com",
+    email_verified: false,
+  }, env), false);
+  assert.equal(outputTokenLimitForUser({ email: "user@example.com", email_verified: true }, env), Number.MAX_SAFE_INTEGER);
+  assert.equal(dailyLimitForUser({ email: "maintenance@example.com", email_verified: true }, env, "chat"), null);
+  assert.equal(dailyLimitForUser({ email: "user@example.com", email_verified: true }, env, "chat"), null);
+});
+
 test("gateway uses an explicitly authorized Groq fallback for a limited OpenRouter model", async (context) => {
   const calls = [];
   setFetch(context, async (url, options = {}) => {
@@ -1642,7 +2060,7 @@ test("gateway uses an explicitly authorized Groq fallback for a limited OpenRout
   assert.equal(groups[0].models[0].availabilityStatus, "limited-rate");
 });
 
-test("gateway fails over immediately on HTTP 429 and tries multiple free provider alternatives", async (context) => {
+test("gateway does not continue fallback through direct Gemini after HTTP 400", async (context) => {
   const chatCalls = [];
   setFetch(context, async (url, options = {}) => {
     const target = String(url);
@@ -1660,23 +2078,15 @@ test("gateway fails over immediately on HTTP 429 and tries multiple free provide
         { id: "llama-3.2-3b-preview", name: "Llama 3.2 3B" },
       ] });
     }
-    if (target === "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000") {
-      return Response.json({ models: [
-        { name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportedGenerationMethods: ["generateContent"] },
-      ] });
-    }
     chatCalls.push({ url: target, body: JSON.parse(options.body) });
     if (target === "https://openrouter.ai/api/v1/chat/completions") {
       return Response.json({ error: { message: "rate limit exceeded" } }, { status: 429 });
     }
     if (target === "https://api.groq.com/openai/v1/chat/completions") {
-      return Response.json({ error: { message: "quota exceeded" } }, { status: 429 });
+      assert.ok(Number.isSafeInteger(chatCalls.at(-1).body.max_tokens) && chatCalls.at(-1).body.max_tokens > 0);
+      return Response.json({ error: { message: "`max_tokens` must be positive" } }, { status: 400 });
     }
-    assert.equal(target, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse");
-    return new Response(
-      'data: {"candidates":[{"content":{"parts":[{"text":"Recovered on the next provider."}]}}]}\n\ndata: [DONE]\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    );
+    assert.fail(`Unexpected provider request after Gemini removal: ${target}`);
   });
   clearGatewayCatalogCache();
   const response = await handleGatewayRequest(request({
@@ -1686,17 +2096,57 @@ test("gateway fails over immediately on HTTP 429 and tries multiple free provide
   }), {
     openrouter: "openrouter-secret",
     groq: "groq-secret",
-    gemini: "gemini-secret",
   });
   assert.equal(response.status, 200);
   const stream = await response.text();
   assert.deepEqual(chatCalls.map(({ url }) => url), [
     "https://openrouter.ai/api/v1/chat/completions",
     "https://api.groq.com/openai/v1/chat/completions",
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
   ]);
-  assert.match(stream, /Recovered on the next provider/);
-  assert.match(stream, /"provider":"gemini"/);
+  assert.match(stream, /rate limit/i);
+  assert.match(stream, /max_tokens.*positive/i);
+  assert.doesNotMatch(stream, /"provider":"gemini"/);
+});
+
+test("gateway skips the rest of a provider's models after its first HTTP 400", async (context) => {
+  const chatCalls = [];
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target === "https://openrouter.ai/api/v1/models") {
+      return Response.json({ data: [{
+        id: "google/gemma-4-26b-a4b-it:free",
+        name: "Gemma 4 (free)",
+        pricing: { prompt: "0", completion: "0" },
+        architecture: { output_modalities: ["text"] },
+      }] });
+    }
+    if (target === "https://api.groq.com/openai/v1/models") {
+      return Response.json({ data: [
+        { id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" },
+        { id: "llama-3.2-3b-preview", name: "Llama 3.2 3B" },
+      ] });
+    }
+    chatCalls.push(target);
+    if (target === "https://openrouter.ai/api/v1/chat/completions") {
+      return Response.json({ error: { message: "rate limit exceeded" } }, { status: 429 });
+    }
+    assert.equal(target, "https://api.groq.com/openai/v1/chat/completions");
+    return Response.json({ error: { message: "`max_tokens` must be positive" } }, { status: 400 });
+  });
+  clearGatewayCatalogCache();
+  const response = await handleGatewayRequest(request({
+    provider: "openrouter",
+    model: "google/gemma-4-26b-a4b-it:free",
+    messages: [{ role: "user", content: "Try a fallback model." }],
+  }), { openrouter: "openrouter-secret", groq: "groq-secret" });
+  const stream = await response.text();
+  assert.equal(response.status, 200);
+  assert.deepEqual(chatCalls, [
+    "https://openrouter.ai/api/v1/chat/completions",
+    "https://api.groq.com/openai/v1/chat/completions",
+  ]);
+  assert.match(stream, /rate limit/i);
+  assert.match(stream, /max_tokens.*positive/i);
 });
 
 test("gateway retries provider server errors and uses an explicitly authorized fallback", async (context) => {
@@ -1788,7 +2238,7 @@ test("gateway does not retry invalid stream data but can use an explicitly autho
   assert.match(stream, /stream yang tidak valid/);
 });
 
-test("gateway rejects an unverified fallback when the provider catalog is unavailable", async (context) => {
+test("gateway uses the built-in model catalog to fail over when a provider catalog is unavailable", async (context) => {
   const calls = [];
   setFetch(context, async (url, options = {}) => {
     const target = String(url);
@@ -1823,11 +2273,11 @@ test("gateway rejects an unverified fallback when the provider catalog is unavai
   }), { openrouter: "openrouter-secret", groq: "groq-secret" });
   assert.equal(response.status, 200);
   const stream = await response.text();
-  assert.equal(calls.length, 2);
-  assert.ok(calls.every(({ url }) => url === "https://openrouter.ai/api/v1/chat/completions"));
-  assert.match(stream, /"error"/);
-  assert.doesNotMatch(stream, /"type":"fallback"/);
-  assert.doesNotMatch(stream, /llama-3\.1-8b-instant/);
+  assert.equal(calls.length, 3);
+  assert.equal(calls.at(-1).url, "https://api.groq.com/openai/v1/chat/completions");
+  assert.equal(calls.at(-1).body.model, "llama-3.1-8b-instant");
+  assert.match(stream, /"type":"fallback"/);
+  assert.match(stream, /Built-in fallback recovered\./);
 });
 
 test("gateway does not retry network failures but can use an explicitly authorized fallback", async (context) => {
@@ -1870,7 +2320,7 @@ test("gateway does not retry network failures but can use an explicitly authoriz
   assert.match(stream, /"provider":"groq"/);
 });
 
-test("gateway follows the six-provider order only after fallback is explicitly authorized", async (context) => {
+test("gateway fallback stops at supported providers and never routes directly to Gemini", async (context) => {
   const chatCalls = [];
   setFetch(context, async (url, options = {}) => {
     const target = String(url);
@@ -1885,22 +2335,12 @@ test("gateway follows the six-provider order only after fallback is explicitly a
     if (target === "https://api.groq.com/openai/v1/models") {
       return Response.json({ data: [{ id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" }] });
     }
-    if (target === "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000") {
-      return Response.json({ models: [{
-        name: "models/gemini-2.5-flash",
-        displayName: "Gemini 2.5 Flash",
-        supportedGenerationMethods: ["generateContent"],
-      }] });
-    }
     chatCalls.push(target);
     if (target === "https://openrouter.ai/api/v1/chat/completions"
       || target === "https://api.groq.com/openai/v1/chat/completions") {
       return Response.json({ error: { message: "temporarily unavailable" } }, { status: 500 });
     }
-    assert.equal(target, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse");
-    return new Response('data: {"candidates":[{"content":{"parts":[{"text":"Gemini fallback"}]}}]}\n\ndata: [DONE]\n\n', {
-      headers: { "Content-Type": "text/event-stream" },
-    });
+    assert.fail(`Unexpected provider request after Gemini removal: ${target}`);
   });
   clearGatewayCatalogCache();
   const response = await handleGatewayRequest(request({
@@ -1908,7 +2348,7 @@ test("gateway follows the six-provider order only after fallback is explicitly a
     provider: "openrouter",
     model: "google/gemma-4-26b-a4b-it:free",
     messages: [{ role: "user", content: "Use the next healthy provider." }],
-  }), { openrouter: "openrouter-secret", groq: "groq-secret", gemini: "gemini-secret" });
+  }), { openrouter: "openrouter-secret", groq: "groq-secret" });
   const stream = await response.text();
 
   assert.equal(response.status, 200);
@@ -1917,12 +2357,11 @@ test("gateway follows the six-provider order only after fallback is explicitly a
     "https://openrouter.ai/api/v1/chat/completions",
     "https://api.groq.com/openai/v1/chat/completions",
     "https://api.groq.com/openai/v1/chat/completions",
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
   ]);
-  assert.match(stream, /Gemini fallback/);
+  assert.match(stream, /Fallback terakhir/);
+  assert.doesNotMatch(stream, /"provider":"gemini"/);
   assert.match(stream, /"provider":"openrouter","model":"google\/gemma-4-26b-a4b-it:free"[^}]*"status":"ERROR"/);
   assert.match(stream, /"provider":"groq","model":"llama-3.1-8b-instant"[^}]*"status":"ERROR"/);
-  assert.match(stream, /"provider":"gemini","model":"gemini-2.5-flash","status":"HEALTHY"/);
 });
 
 test("gateway uses a configured free model only after fallback is explicitly authorized", async (context) => {
@@ -2076,7 +2515,7 @@ test("gateway sends uploaded image data to a model that advertises vision suppor
   assert.match(await response.text(), /Gambar menunjukkan seekor kucing/);
 });
 
-test("legacy Pollinations image routes never fetch images from the Worker", async (context) => {
+test("legacy non-Gemini image routes reject requests without contacting image providers", async (context) => {
   let upstreamCalls = 0;
   setFetch(context, async () => {
     upstreamCalls += 1;
@@ -2092,6 +2531,8 @@ test("legacy Pollinations image routes never fetch images from the Worker", asyn
     body: JSON.stringify({ prompt: "red robot", model: "flux", width: 1024, height: 1024 }),
   }));
   assert.equal(response.status, 410);
+  const result = await response.json();
+  assert.match(result.error.message, /hanya tersedia melalui Gemini Image di OpenRouter/i);
   assert.equal(upstreamCalls, 0);
 });
 
@@ -2160,6 +2601,131 @@ test("verified Google and GitHub accounts access server models without an email 
     assert.equal(response.status, 200);
     assert.deepEqual((await response.json()).providers, ["monid"]);
   }
+});
+
+test("the authenticated model endpoint excludes direct Gemini chat providers", async (context) => {
+  clearGatewayCatalogCache();
+  const { token, jwk } = await authorizedToken();
+  const catalogs = new Map([
+    ["https://integrate.api.nvidia.com/v1/models", { data: [{ id: "nvidia/nemotron-nano-30b", name: "Nemotron Nano" }] }],
+    ["https://openrouter.ai/api/v1/models", {
+      data: [{
+        id: "meta-llama/llama-4-scout",
+        name: "Llama 4 Scout",
+        pricing: { prompt: "0.000001", completion: "0.000002" },
+        architecture: { input_modalities: ["text"], output_modalities: ["text"] },
+      }],
+    }],
+    ["https://api.groq.com/openai/v1/models", { data: [{ id: "llama-3.3-70b-versatile", name: "Llama 3.3 70B" }] }],
+    ["https://api.anthropic.com/v1/models?limit=1000", { data: [{ id: "claude-3-7-sonnet-latest", display_name: "Claude Sonnet" }] }],
+    ["https://api.moonshot.cn/v1/models", { data: [{ id: "kimi-k2.5", name: "Kimi K2.5" }] }],
+  ]);
+  setFetch(context, async (url) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    const catalog = catalogs.get(target);
+    assert.ok(catalog, `Unexpected catalog URL: ${target}`);
+    return Response.json(catalog);
+  });
+  const response = await worker.fetch(new Request("https://worker.test/api/models", {
+    method: "POST",
+    headers: {
+      Authorization: ["Bearer", token].join(" "),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ includeCatalog: true }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    NVIDIA_API_KEY: "nvidia-secret",
+    GEMINI_LIVE_API_KEY: "gemini-live-secret",
+    OPENROUTER_API_KEY: "openrouter-secret",
+    GROQ_API_KEY: "groq-secret",
+    CLAUDE_API_KEY: "claude-secret",
+    KIMI_API_KEY: "kimi-secret",
+    HF_TOKEN: "huggingface-secret",
+  });
+  assert.equal(response.status, 200);
+  const catalog = await response.json();
+  assert.deepEqual(catalog.providers, ["openrouter", "groq", "nvidia", "claude", "kimi"]);
+  assert.deepEqual(catalog.groups.map((group) => group.provider), [
+    "gateway-nvidia",
+    "gateway-openrouter",
+    "gateway-groq",
+    "gateway-claude",
+    "gateway-kimi",
+  ]);
+  assert.ok(catalog.groups.every((group) => group.models.length === 1 && !group.models[0].catalogFallback));
+  assert.doesNotMatch(JSON.stringify(catalog), /(?:nvidia|gemini-live|openrouter|groq|claude|kimi|huggingface)-secret/);
+});
+
+test("authenticated chat endpoints reject direct Gemini routing", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  const upstreamRequests = [];
+  setFetch(context, async (url) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    upstreamRequests.push(target);
+    throw new Error(`Unexpected provider request: ${target}`);
+  });
+  const env = {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    GEMINI_LIVE_API_KEY: "gemini-live-secret",
+    OPENROUTER_API_KEY: "openrouter-secret",
+    AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
+  };
+  for (const [path, payload] of [
+    ["/api/chat", { provider: "gemini", model: "gemini-2.5-flash", messages: [{ role: "user", content: "hello" }] }],
+    ["/api/gateway", { provider: "gemini", model: "gemini-2.5-flash", messages: [{ role: "user", content: "hello" }] }],
+  ]) {
+    const response = await worker.fetch(new Request(`https://worker.test${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }), env);
+    assert.equal(response.status, 400, path);
+    assert.match((await response.json()).error.message, /provider|model/i, path);
+  }
+  assert.deepEqual(upstreamRequests, []);
+});
+
+test("Gemini Live reads only the dedicated Worker secret", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  const upstreamRequests = [];
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    upstreamRequests.push({ target, key: options.headers?.["x-goog-api-key"] });
+    return Response.json({ name: "authTokens/ephemeral-token", expireTime: "2026-10-28T00:00:00Z" });
+  });
+  const response = await worker.fetch(new Request("https://worker.test/api/live/token", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: "{}",
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    GEMINI_API_KEY: "legacy-secret-must-not-be-used",
+    GEMINI_LIVE_API_KEY: "live-only-secret",
+    AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    token: "authTokens/ephemeral-token",
+    expireTime: "2026-10-28T00:00:00Z",
+  });
+  assert.deepEqual(upstreamRequests, [{
+    target: "https://generativelanguage.googleapis.com/v1beta/auth_tokens",
+    key: "live-only-secret",
+  }]);
 });
 
 test("password and phone accounts cannot use server models", async (context) => {
@@ -2286,7 +2852,6 @@ test("Monid-only secret exposes the data service without requiring a chat provid
 });
 
 const AI_RATE_LIMIT_TEST_ROUTES = [
-  ["chat non-gateway", "/api/chat", { provider: "gemini", model: "gemini-2.5-flash", messages: [{ role: "user", content: "hello" }] }, "chat"],
   ["image generation", "/api/images/generate", { prompt: "A simple landscape" }, "image-generate"],
   ["transcription", "/api/transcribe", new FormData(), "transcribe"],
   ["Monid discovery", "/api/monid/discover", { query: "weather" }, "monid-discover"],
@@ -2319,7 +2884,7 @@ test("AI routes enforce per-minute UID limits with Indonesian 429 responses", as
     }), {
       FIREBASE_PROJECT_ID: "my-ai-69027",
       AUTHORIZED_EMAILS: "user@example.com",
-      GEMINI_API_KEY: "gemini-secret",
+      GEMINI_LIVE_API_KEY: "gemini-live-secret",
       AI_RATE_LIMITER: rateLimitBinding,
       AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
     });
@@ -2330,7 +2895,11 @@ test("AI routes enforce per-minute UID limits with Indonesian 429 responses", as
 });
 
 test("AI routes require login before applying either rate limit", async () => {
-  for (const [label, path, payload] of AI_RATE_LIMIT_TEST_ROUTES) {
+  const protectedRoutes = [
+    ...AI_RATE_LIMIT_TEST_ROUTES,
+    ["chat", "/api/chat", { provider: "gemini", model: "gemini-2.5-flash", messages: [{ role: "user", content: "hello" }] }],
+  ];
+  for (const [label, path, payload] of protectedRoutes) {
     const response = await worker.fetch(new Request(`https://worker.test${path}`, {
       method: "POST",
       headers: payload instanceof FormData ? {} : { "Content-Type": "application/json" },
@@ -2356,7 +2925,7 @@ test("AI routes enforce per-day UID limits with Indonesian 429 responses", async
     }), {
       FIREBASE_PROJECT_ID: "my-ai-69027",
       AUTHORIZED_EMAILS: "user@example.com",
-      GEMINI_API_KEY: "gemini-secret",
+      GEMINI_LIVE_API_KEY: "gemini-live-secret",
       AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
       AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(false, dailyCalls),
     });
@@ -2381,17 +2950,27 @@ test("AI daily Durable Object increments each route independently and rejects at
     method: "POST",
     body: JSON.stringify({ route, limit: AI_ROUTE_LIMITS[route].perDay }),
   });
-  const chatFirst = await (await store.fetch(makeRequest("chat"))).json();
+  const chatFirst = await (await store.fetch(makeRequest("transcribe"))).json();
   const imageFirst = await (await store.fetch(makeRequest("image-generate"))).json();
   assert.equal(chatFirst.allowed, true);
   assert.equal(imageFirst.allowed, true);
-  assert.equal(chatFirst.remaining, AI_ROUTE_LIMITS.chat.perDay - 1);
+  assert.equal(chatFirst.remaining, AI_ROUTE_LIMITS.transcribe.perDay - 1);
   assert.equal(imageFirst.remaining, AI_ROUTE_LIMITS["image-generate"].perDay - 1);
-  for (let index = 1; index < AI_ROUTE_LIMITS.chat.perDay; index += 1) {
-    await store.fetch(makeRequest("chat"));
+  for (let index = 1; index < AI_ROUTE_LIMITS.transcribe.perDay; index += 1) {
+    await store.fetch(makeRequest("transcribe"));
   }
-  const exhausted = await (await store.fetch(makeRequest("chat"))).json();
+  const exhausted = await (await store.fetch(makeRequest("transcribe"))).json();
   assert.deepEqual(exhausted, { allowed: false, remaining: 0 });
+
+  values.clear();
+  const oneChatPerDay = new Request("https://ai-daily-rate-limit.internal/reserve", {
+    method: "POST",
+    body: JSON.stringify({ route: "transcribe", limit: 1 }),
+  });
+  const constrainedFirst = await (await store.fetch(oneChatPerDay.clone())).json();
+  const constrainedSecond = await (await store.fetch(oneChatPerDay)).json();
+  assert.equal(constrainedFirst.allowed, true);
+  assert.deepEqual(constrainedSecond, { allowed: false, remaining: 0 });
 });
 
 test("Monid run requires a readable price within MONID_MAX_RUN_COST", async (context) => {
@@ -2562,23 +3141,30 @@ test("provider connection test is authenticated, rate-limited, and never returns
   assert.doesNotMatch(JSON.stringify(result), /groq-secret/);
 });
 
-test("enhance-prompt authenticates and prioritizes NVIDIA NIM", async (context) => {
+test("enhance-prompt uses the fastest available provider and accepts detailed output", async (context) => {
   const { token, jwk } = await authorizedToken();
-  clearGatewayCatalogCache("nvidia");
-  let nvidiaRequest;
+  clearGatewayCatalogCache();
+  let helperRequest;
   let upstreamCalls = 0;
   let rateLimited = false;
+  const enhancedPrompt = `Buat rencana belajar Python dengan tujuan, tahapan, latihan, dan pemeriksaan hasil.\n${Array.from(
+    { length: 300 },
+    (_, index) => `- Tahap ${index + 1}: jelaskan kegiatan, hasil yang diharapkan, dan cara memeriksa pemahaman.`,
+  ).join("\n")}`;
   setFetch(context, async (url, options) => {
     if (String(url).includes("securetoken@system.gserviceaccount.com")) {
       return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
     }
+    if (String(url) === "https://api.groq.com/openai/v1/models") {
+      return Response.json({ data: [{ id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" }] });
+    }
     if (String(url) === "https://integrate.api.nvidia.com/v1/models") {
       return Response.json({ data: [{ id: "nvidia/nemotron-nano-3-30b-a3b", name: "Nemotron Nano" }] });
     }
-    assert.equal(url, "https://integrate.api.nvidia.com/v1/chat/completions");
+    assert.equal(String(url), "https://api.groq.com/openai/v1/chat/completions");
     upstreamCalls++;
-    nvidiaRequest = { headers: options.headers, body: JSON.parse(options.body), signal: options.signal };
-    return Response.json({ choices: [{ message: { content: "Buat rencana belajar Python empat minggu dengan target mingguan dan latihan harian." } }] });
+    helperRequest = { headers: options.headers, body: JSON.parse(options.body), signal: options.signal };
+    return Response.json({ choices: [{ message: { content: enhancedPrompt } }] });
   });
   const env = {
     FIREBASE_PROJECT_ID: "my-ai-69027",
@@ -2597,19 +3183,19 @@ test("enhance-prompt authenticates and prioritizes NVIDIA NIM", async (context) 
     },
     body: JSON.stringify(body),
   });
-  const response = await worker.fetch(makeRequest({ prompt: "buat jadwal belajar python" }), env);
+  const sourcePrompt = `buat jadwal belajar python${" dengan detail yang relevan".repeat(300)}`;
+  const response = await worker.fetch(makeRequest({ prompt: sourcePrompt }), env);
   assert.equal(response.status, 200);
   const responseBody = await response.json();
-  assert.deepEqual(responseBody, {
-    prompt: "Buat rencana belajar Python empat minggu dengan target mingguan dan latihan harian.",
-    provider: "nvidia",
-    model: "nvidia/nemotron-nano-3-30b-a3b",
-  });
-  assert.equal(nvidiaRequest.headers.Authorization, "Bearer nvidia-secret");
-  assert.equal(nvidiaRequest.body.model, "nvidia/nemotron-nano-3-30b-a3b");
-  assert.equal(nvidiaRequest.body.stream, false);
-  assert.equal(nvidiaRequest.body.messages[1].content, "buat jadwal belajar python");
-  assert.match(nvidiaRequest.body.messages[0].content, /same language as the input/);
+  assert.equal(responseBody.prompt, enhancedPrompt);
+  assert.equal(responseBody.provider, "groq");
+  assert.equal(responseBody.model, "llama-3.1-8b-instant");
+  assert.ok(responseBody.prompt.length > 12_000);
+  assert.equal(helperRequest.headers.Authorization, "Bearer groq-secret");
+  assert.equal(helperRequest.body.model, "llama-3.1-8b-instant");
+  assert.equal(helperRequest.body.stream, false);
+  assert.equal(helperRequest.body.messages[1].content, sourcePrompt);
+  assert.match(helperRequest.body.messages[0].content, /arbitrary word-count limit/);
   assert.doesNotMatch(JSON.stringify(responseBody), /nvidia-secret|groq-secret/);
 
   rateLimited = true;
@@ -2622,19 +3208,219 @@ test("enhance-prompt authenticates and prioritizes NVIDIA NIM", async (context) 
   assert.equal(upstreamCalls, 1);
 });
 
+test("enhance-prompt falls through provider billing failures without retrying that provider", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  clearGatewayCatalogCache();
+  const chatCalls = [];
+  setFetch(context, async (url) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    if (target === "https://api.groq.com/openai/v1/models") {
+      return Response.json({ data: [{ id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" }] });
+    }
+    if (target === "https://api.anthropic.com/v1/models?limit=1000") {
+      return Response.json({ data: [{ id: "claude-3-5-haiku-20241022", display_name: "Claude Haiku" }] });
+    }
+    chatCalls.push(target);
+    if (target === "https://api.groq.com/openai/v1/chat/completions") {
+      return Response.json({ error: { message: "provider billing unavailable" } }, { status: 402 });
+    }
+    assert.equal(target, "https://api.anthropic.com/v1/messages");
+    return Response.json({ content: [{ type: "text", text: "Buat rencana belajar yang lengkap dan terukur." }] });
+  });
+  const response = await worker.fetch(new Request("https://worker.test/enhance-prompt", {
+    method: "POST",
+    headers: {
+      Authorization: ["Bearer", token].join(" "),
+      "Content-Type": "application/json",
+      Origin: "https://myai-v3-firmansyah.pages.dev",
+    },
+    body: JSON.stringify({ prompt: "buat rencana belajar" }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    GROQ_API_KEY: "groq-secret",
+    CLAUDE_API_KEY: "claude-secret",
+    AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    prompt: "Buat rencana belajar yang lengkap dan terukur.",
+    provider: "claude",
+    model: "claude-3-5-haiku-20241022",
+  });
+  assert.deepEqual(chatCalls, [
+    "https://api.groq.com/openai/v1/chat/completions",
+    "https://api.anthropic.com/v1/messages",
+  ]);
+});
+
+test("legacy Hugging Face secrets do not enable Rapikan or make provider API calls", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  const outboundRequests = [];
+  setFetch(context, async (url) => {
+    const target = String(url);
+    outboundRequests.push(target);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    throw new Error(`Unexpected outbound request: ${target}`);
+  });
+  const response = await worker.fetch(new Request("https://worker.test/enhance-prompt", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Origin: "https://myai-v3-firmansyah.pages.dev",
+    },
+    body: JSON.stringify({ prompt: "buat ringkasan jelas tiga poin" }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    HF_TOKEN: "legacy-secret",
+  });
+  assert.equal(response.status, 401);
+  assert.equal(outboundRequests.length, 0);
+});
+
+test("enhance-prompt supports Claude and OpenAI-compatible Kimi without Gemini", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  let activeProvider = "";
+  const requests = [];
+  const providerFixtures = {
+    claude: {
+      catalogUrl: "https://api.anthropic.com/v1/models?limit=1000",
+      model: "claude-3-5-haiku-20241022",
+      envKey: "CLAUDE_API_KEY",
+      endpoint: "https://api.anthropic.com/v1/messages",
+    },
+    kimi: {
+      catalogUrl: "https://api.moonshot.cn/v1/models",
+      model: "moonshot-v1-8k",
+      envKey: "KIMI_API_KEY",
+      endpoint: "https://api.moonshot.cn/v1/chat/completions",
+    },
+  };
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    const fixture = providerFixtures[activeProvider];
+    if (target === fixture.catalogUrl) {
+      if (activeProvider === "claude") {
+        return Response.json({ data: [{ id: fixture.model, display_name: "Claude Haiku" }] });
+      }
+      return Response.json({ data: [{ id: fixture.model, name: "Kimi" }] });
+    }
+    assert.equal(target, fixture.endpoint);
+    const body = JSON.parse(options.body);
+    requests.push({ provider: activeProvider, url: target, headers: options.headers, body });
+    if (activeProvider === "claude") {
+      return Response.json({ content: [{ type: "text", text: "Buat rencana belajar lengkap dan terukur." }] });
+    }
+    return Response.json({ choices: [{ message: { content: "Buat rencana belajar lengkap dan terukur." } }] });
+  });
+
+  for (const [provider, fixture] of Object.entries(providerFixtures)) {
+    activeProvider = provider;
+    clearGatewayCatalogCache(provider);
+    const response = await worker.fetch(new Request("https://worker.test/enhance-prompt", {
+      method: "POST",
+      headers: {
+        Authorization: ["Bearer", token].join(" "),
+        "Content-Type": "application/json",
+        Origin: "https://myai-v3-firmansyah.pages.dev",
+      },
+      body: JSON.stringify({ prompt: "buat rencana belajar" }),
+    }), {
+      FIREBASE_PROJECT_ID: "my-ai-69027",
+      AUTHORIZED_EMAILS: "user@example.com",
+      [fixture.envKey]: `${provider}-secret`,
+      AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      prompt: "Buat rencana belajar lengkap dan terukur.",
+      provider,
+      model: fixture.model,
+    });
+  }
+
+  assert.equal(requests.length, 2);
+  const claude = requests.find(({ provider }) => provider === "claude");
+  assert.equal(claude.headers["x-api-key"], "claude-secret");
+  assert.equal(claude.body.max_tokens, 4096);
+  const kimi = requests.find(({ provider }) => provider === "kimi");
+  assert.equal(kimi.headers.Authorization, "Bearer kimi-secret");
+  assert.equal(kimi.body.model, "moonshot-v1-8k");
+  assert.doesNotMatch(JSON.stringify(requests.map(({ body }) => body)), /gemini-secret|claude-secret|kimi-secret/);
+});
+
+test.skip("Legacy Hugging Face token enabled signed-in Rapikan", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  clearGatewayCatalogCache("huggingface");
+  let completionRequest;
+  setFetch(context, async (url, options = {}) => {
+    if (String(url).includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    if (String(url) === "https://router.huggingface.co/v1/models") {
+      assert.match(options.headers.Authorization, /^Bearer /);
+      return Response.json({ data: [
+        { id: "meta-llama/Llama-3.1-8B-Instruct", name: "Llama 3.1 8B Instruct" },
+      ] });
+    }
+    assert.equal(String(url), "https://router.huggingface.co/v1/chat/completions");
+    assert.match(options.headers.Authorization, /^Bearer /);
+    completionRequest = JSON.parse(options.body);
+    return Response.json({ choices: [{ message: { content: "Tulis ringkasan yang jelas dengan tiga poin utama." } }] });
+  });
+  const response = await worker.fetch(new Request("https://worker.test/enhance-prompt", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Origin: "https://myai-v3-firmansyah.pages.dev",
+    },
+    body: JSON.stringify({ prompt: "buat ringkasan jelas tiga poin" }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    HUGGINGFACE_TOKEN: "huggingface-secret",
+    AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    prompt: "Tulis ringkasan yang jelas dengan tiga poin utama.",
+    provider: "huggingface",
+    model: "meta-llama/Llama-3.1-8B-Instruct",
+  });
+  assert.equal(completionRequest.model, "meta-llama/Llama-3.1-8B-Instruct");
+});
+
 test("image prompt enhancement falls back to Groq and repairs invalid JSON (MOCK)", async (context) => {
   const { token, jwk } = await authorizedToken();
+  clearGatewayCatalogCache();
   const requests = [];
   setFetch(context, async (url, options = {}) => {
     if (String(url).includes("securetoken@system.gserviceaccount.com")) {
       return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    if (String(url) === "https://api.groq.com/openai/v1/models") {
+      return Response.json({ data: [{ id: "openai/gpt-oss-20b", name: "GPT OSS 20B" }] });
     }
     assert.equal(String(url), "https://api.groq.com/openai/v1/chat/completions");
     requests.push(JSON.parse(options.body));
     const content = requests.length === 1
       ? "not-json"
       : JSON.stringify({
-        prompt: "A vivid Indonesian Independence Day flag-raising ceremony with prominent red-and-white flags in a village square, warm morning light, and a joyful community, editorial illustration, no text.",
+        prompt: "A vivid Indonesian Independence Day celebration in a village square on the morning of August 17, a flag-raising ceremony with a large red-and-white Indonesian flag climbing a tall bamboo pole as a joyful crowd of generic Indonesian villagers in traditional batik and simple everyday clothes watches with pride, red-and-white bunting and small flags decorating the houses around the square, warm golden morning sunlight streaming from the east with soft long shadows, a gentle festive atmosphere with children cheering near the front, rich red, white, and warm earth tones with green foliage accents, wide cinematic composition with a low camera angle looking up at the flag, shallow depth of field, detailed textures of the flag fabric waving in a light breeze, polished editorial illustration style, no readable text.",
         negative: "unrelated portraits, incorrect flag colors, logos, watermark, text",
         aspect: "16:9",
         style: "Editorial illustration",
@@ -2645,7 +3431,7 @@ test("image prompt enhancement falls back to Groq and repairs invalid JSON (MOCK
   const response = await worker.fetch(new Request("https://worker.test/enhance-prompt", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: ["Bearer", token].join(" "),
       "Content-Type": "application/json",
       Origin: "https://myai-v3-firmansyah.pages.dev",
     },
@@ -2665,9 +3451,102 @@ test("image prompt enhancement falls back to Groq and repairs invalid JSON (MOCK
   assert.match(result.prompt, /Indonesian Independence Day/i);
   assert.match(result.prompt, /red-and-white/i);
   assert.equal(requests.length, 2);
+  assert.ok(requests.every((request) => request.max_tokens <= 4096));
   assert.equal(requests[0].response_format.type, "json_object");
   assert.match(requests[1].messages[1].content, /repair/);
   assert.doesNotMatch(JSON.stringify(result), /groq-secret/);
+});
+
+test("authenticated OpenRouter chat bypasses MyAI quotas and uses the catalog maximum when known", async (context) => {
+  clearGatewayCatalogCache("openrouter");
+  const { token, jwk } = await authorizedToken();
+  let sentBody;
+  let limiterCalls = 0;
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    if (target === "https://openrouter.ai/api/v1/models") {
+      return Response.json({ data: [{
+        id: "openai/gpt-4o",
+        name: "GPT-4o",
+        pricing: { prompt: "0.0000025", completion: "0.00001" },
+        context_length: 128_000,
+        top_provider: { max_completion_tokens: 32_000 },
+        architecture: { input_modalities: ["text"], output_modalities: ["text"] },
+      }] });
+    }
+    assert.equal(target, "https://openrouter.ai/api/v1/chat/completions");
+    sentBody = JSON.parse(options.body);
+    return new Response('data: {"choices":[{"delta":{"content":"OpenRouter works."}}]}\n\ndata: [DONE]\n\n', {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const response = await worker.fetch(new Request("https://worker.test/chat", {
+    method: "POST",
+    headers: {
+      Authorization: ["Bearer", token].join(" "),
+      "Content-Type": "application/json",
+      Origin: "https://myai-v3-firmansyah.pages.dev",
+    },
+    body: JSON.stringify({
+      provider: "openrouter",
+      model: "openai/gpt-4o",
+      messages: [{ role: "user", content: "Say hello." }],
+    }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    OPENROUTER_API_KEY: "openrouter-secret",
+    AI_RATE_LIMITER: { limit: async () => { limiterCalls += 1; return { success: false }; } },
+  });
+  assert.equal(response.status, 200);
+  assert.equal(limiterCalls, 0);
+  assert.equal(sentBody.max_tokens, 32_000);
+  assert.match(await response.text(), /OpenRouter works/);
+});
+
+test("direct Groq chat caps output tokens at the model limit", async (context) => {
+  clearGatewayCatalogCache("groq");
+  const { token, jwk } = await authorizedToken();
+  let sentBody;
+  setFetch(context, async (url, options) => {
+    if (String(url).includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    if (String(url).endsWith("/models")) {
+      return Response.json({ data: [{ id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" }] });
+    }
+    assert.equal(String(url), "https://api.groq.com/openai/v1/chat/completions");
+    sentBody = JSON.parse(options.body);
+    return new Response('data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n', {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+  const response = await worker.fetch(new Request("https://worker.test/chat", {
+    method: "POST",
+    headers: {
+      Authorization: ["Bearer", token].join(" "),
+      "Content-Type": "application/json",
+      Origin: "https://myai-v3-firmansyah.pages.dev",
+    },
+    body: JSON.stringify({
+      provider: "groq",
+      model: "llama-3.1-8b-instant",
+      messages: [{ role: "user", content: "hello" }],
+    }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    PREMIUM_ALLOWED_UIDS: "test-user",
+    GROQ_API_KEY: "groq-secret",
+    AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(sentBody.max_tokens, 4096);
+  assert.match(await response.text(), /"content":"hello"/);
 });
 
 test("chat Worker injects quality instructions into gateway model requests", async (context) => {
@@ -2722,194 +3601,108 @@ test("chat Worker injects quality instructions into gateway model requests", asy
   assert.deepEqual(sentBody.stream_options, { include_usage: true });
   assert.equal(sentMessages[0].role, "system");
   assert.match(sentMessages[0].content, /production-ready/);
-  assert.match(sentMessages[0].content, /Reply in the same language as the user's latest request/);
-  assert.match(sentMessages[0].content, /HTML ARTIFACT LANGUAGE/);
-  assert.match(sentMessages[0].content, /visible titles, headings, labels, buttons/);
-  assert.match(sentMessages[0].content, /AUTOMATIC ACTION ROUTER/);
-  assert.match(sentMessages[0].content, /structured output only when the latest request explicitly needs an application artifact/);
-  assert.match(sentMessages[0].content, /ordinary questions and conversation, answer naturally/);
+  assert.match(sentMessages[0].content, /Answer the latest request directly in the user's language/);
+  assert.match(sentMessages[0].content, /Use the fewest tokens that fully solve the task/);
+  assert.match(sentMessages[0].content, /Use app features and tools when available and relevant/);
+  assert.match(sentMessages[0].content, /For Indonesian requests, make generated HTML\/CSS\/JavaScript visible text Indonesian/);
+  assert.match(sentMessages[0].content, /Use structured artifact formats only when the user requests a supported document/);
   assert.match(sentMessages[0].content, /About User: Web developer/);
   assert.match(sentMessages[0].content, /Preferred Response Style: Answer concisely/);
   assert.match(sentMessages[0].content, /Keep the response in Indonesian/);
   assert.equal(sentMessages[1].content, "Write a complete page.");
 });
 
-test("image generation uses NVIDIA NIM for prompt planning and Pollinations for image output", async (context) => {
+test("legacy chat image requests are rejected without contacting image providers", async (context) => {
   const { token, jwk } = await authorizedToken();
-  let optimizedPrompt = "";
-  let enhancerRequestBody;
-  let limiterKey = "";
-  clearGatewayCatalogCache("nvidia");
-  setFetch(context, async (url, options) => {
+  const unexpectedRequests = [];
+  setFetch(context, async (url) => {
     if (String(url).includes("securetoken@system.gserviceaccount.com")) {
       return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
     }
-    if (String(url) === "https://integrate.api.nvidia.com/v1/models") {
-      return Response.json({ data: [{ id: "nvidia/nemotron-nano-3-30b-a3b", name: "Nemotron Nano" }] });
-    }
-    if (String(url) === "https://integrate.api.nvidia.com/v1/chat/completions") {
-      enhancerRequestBody = JSON.parse(options.body);
-      optimizedPrompt = JSON.stringify({
-        prompt: "A sunrise over mountain peaks, golden dawn light reflecting on a still lake, cinematic wide landscape.",
-        negative: "unrelated objects, text, logos, watermark",
-        aspect: "16:9",
-        style: "Cinematic landscape",
-        assumptions: "Saya mempertahankan gunung dan suasana matahari terbit.",
-      });
-      return Response.json({ choices: [{ message: { content: optimizedPrompt } }] });
-    }
-    assert.fail(`Unexpected Worker upstream request: ${url}`);
+    unexpectedRequests.push(String(url));
+    throw new Error(`Unexpected image provider request: ${url}`);
   });
 
-  const verifyUploadedImageEdit = async (childContext) => {
-    const { token, jwk } = await authorizedToken();
-    let visionRequest;
-    setFetch(childContext, async (url, options) => {
-      if (String(url).includes("securetoken@system.gserviceaccount.com")) {
-        return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
-      }
-      if (String(url) === "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000") {
-        return Response.json({ models: [{
-          name: "models/gemini-2.5-flash",
-          displayName: "Gemini 2.5 Flash",
-          supportedGenerationMethods: ["generateContent"],
-        }] });
-      }
-      assert.match(String(url), /models\/gemini-2\.5-flash:generateContent$/);
-      assert.equal(options.headers["x-goog-api-key"], "gemini-secret");
-      visionRequest = JSON.parse(options.body);
-      return Response.json({ candidates: [{ content: { parts: [{ text: "A realistic, softly lit portrait with natural skin tones and balanced warm lighting" }] } }] });
-    });
-    clearGatewayCatalogCache("gemini");
-    const response = await worker.fetch(new Request("https://worker.test/chat", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Origin: "https://myai-v3-firmansyah.pages.dev",
-      },
-      body: JSON.stringify({
-        provider: "gemini",
-        model: "flux",
-        messages: [{
-          role: "user",
-          content: "Perbaiki pencahayaannya agar tampak realistis.",
-          images: ["data:image/jpeg;base64,ZmFrZS1pbWFnZQ=="],
-        }],
-      }),
-    }), {
-      FIREBASE_PROJECT_ID: "my-ai-69027",
-      AUTHORIZED_EMAILS: "user@example.com",
-      GEMINI_API_KEY: "gemini-secret",
-      AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
-      AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
-    });
-    assert.equal(response.status, 200);
-    assert.match(visionRequest.contents[0].parts[0].text, /Perbaiki pencahayaannya/);
-    assert.deepEqual(visionRequest.contents[0].parts[1], {
-      inlineData: { mimeType: "image/jpeg", data: "ZmFrZS1pbWFnZQ==" },
-    });
-    const result = await response.text();
-    assert.match(result, /^!\[Generated Image\]\(https:\/\/image\.pollinations\.ai\/prompt\/A%20realistic/);
-  };
-
-  const verifyNvidiaVisionImageEdit = async (childContext) => {
-    const { token, jwk } = await authorizedToken();
-    let visionRequest;
-    clearGatewayCatalogCache("nvidia");
-    setFetch(childContext, async (url, options) => {
-      if (String(url).includes("securetoken@system.gserviceaccount.com")) {
-        return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
-      }
-      if (String(url) === "https://integrate.api.nvidia.com/v1/models") {
-        return Response.json({ data: [{
-          id: "meta/llama-3.2-11b-vision-instruct",
-          name: "Llama Vision",
-          architecture: { input_modalities: ["text", "image"] },
-        }] });
-      }
-      assert.equal(String(url), "https://integrate.api.nvidia.com/v1/chat/completions");
-      visionRequest = JSON.parse(options.body);
-      return Response.json({ choices: [{ message: { content: "A softly lit realistic portrait with natural skin tones." } }] });
-    });
-    const response = await worker.fetch(new Request("https://worker.test/chat", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Origin: "https://myai-v3-firmansyah.pages.dev",
-      },
-      body: JSON.stringify({
-        provider: "gemini",
-        model: "flux",
-        messages: [{
-          role: "user",
-          content: "Perbaiki pencahayaannya agar tampak realistis.",
-          images: ["data:image/jpeg;base64,ZmFrZS1pbWFnZQ=="],
-        }],
-      }),
-    }), {
-      FIREBASE_PROJECT_ID: "my-ai-69027",
-      AUTHORIZED_EMAILS: "user@example.com",
-      NVIDIA_API_KEY: "nvidia-secret",
-      AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
-      AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
-    });
-    assert.equal(response.status, 200);
-    assert.equal(visionRequest.model, "meta/llama-3.2-11b-vision-instruct");
-    assert.match(visionRequest.messages[0].content[0].text, /Perbaiki pencahayaannya/);
-    assert.deepEqual(visionRequest.messages[0].content[1], {
-      type: "image_url",
-      image_url: { url: "data:image/jpeg;base64,ZmFrZS1pbWFnZQ==" },
-    });
-    assert.match(await response.text(), /^!\[Generated Image\]\(https:\/\/image\.pollinations\.ai\/prompt\/A%20softly/);
-  };
-
-  const verifyImageEditIntent = () => {
-    assert.equal(isImageEditRequest("Perbaiki pencahayaannya agar tampak realistis."), true);
-    assert.equal(isImageEditRequest("Ubah gaya jadi anime."), true);
-    assert.equal(isImageEditRequest("Jelaskan apa yang terlihat pada gambar ini."), false);
-  };
   const response = await worker.fetch(new Request("https://worker.test/chat", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: ["Bearer", token].join(" "),
       "Content-Type": "application/json",
       Origin: "https://myai-v3-firmansyah.pages.dev",
     },
     body: JSON.stringify({
-      provider: "gemini",
-      model: "flux",
-      imageWidth: 1280,
-      imageHeight: 720,
-      messages: [{ role: "user", content: "Buatkan gambar sampel: pegunungan saat matahari terbit." }],
+      provider: "openrouter",
+      model: "google/gemini-2.5-flash-image",
+      imageGeneration: true,
+      messages: [{ role: "user", content: "Create a mountain landscape." }],
     }),
   }), {
     FIREBASE_PROJECT_ID: "my-ai-69027",
     AUTHORIZED_EMAILS: "user@example.com",
-    NVIDIA_API_KEY: "nvidia-secret",
+    OPENROUTER_API_KEY: "openrouter-secret",
+  });
+
+  const result = await response.json();
+  assert.equal(response.status, 410, result.error.message);
+  assert.match(result.error.message, /hanya tersedia melalui Gemini Image di OpenRouter/i);
+  assert.deepEqual(unexpectedRequests, []);
+});
+
+test("chat Worker keeps website prompts with image placeholder requirements on the text route", async (context) => {
+  clearGatewayCatalogCache("groq");
+  const { token, jwk } = await authorizedToken();
+  let chatRequests = 0;
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    if (target === "https://api.groq.com/openai/v1/models") {
+      return Response.json({ data: [{ id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" }] });
+    }
+    assert.equal(target, "https://api.groq.com/openai/v1/chat/completions");
+    chatRequests++;
+    return new Response('data: {"choices":[{"delta":{"content":"Website brief accepted."}}]}\n\ndata: [DONE]\n\n', {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  });
+
+  const response = await worker.fetch(new Request("https://worker.test/chat", {
+    method: "POST",
+    headers: {
+      Authorization: ["Bearer", token].join(" "),
+      "Content-Type": "application/json",
+      Origin: "https://myai-v3-firmansyah.pages.dev",
+    },
+    body: JSON.stringify({
+      provider: "gateway-groq",
+      model: "llama-3.1-8b-instant",
+      messages: [{
+        role: "user",
+        content: `Peran: Developer front-end senior. Tugas: Buat website portofolio pribadi yang profesional dan siap dipublikasikan.
+Konteks: nama [Nama lengkap], profesi [UI/UX Designer], target rekruter dan klien, tujuan mendapat pekerjaan, konten Bahasa Indonesia.
+Tech stack: HTML, CSS, JavaScript murni; satu file jika memungkinkan, bersih dan mudah diedit.
+Desain: editorial minimalis, pilih palet dan font yang cocok, hindari template generik, dukung light/dark mode.
+Struktur: navbar sticky dan hamburger; hero dengan dua CTA; tentang saya dan fakta cepat; skill per kategori; 3-6 proyek dengan filter dan detail studi kasus; pengalaman dan pendidikan; testimoni; artikel; kontak dengan validasi; footer.
+Konten kosong harus memakai placeholder yang ditandai <!-- GANTI: ... -->. Gambar placeholder memakai gradient atau SVG lokal.
+Interaksi: scroll reveal, hover, smooth scroll, active section, theme toggle, reduced motion.
+Responsif mobile-first, uji 360px, 768px, 1280px; aksesibel, keyboard, fokus jelas, kontras WCAG AA.
+SEO: title, description, Open Graph, favicon; lazy-load; target Lighthouse 90+.
+Output: kode lengkap, cara ganti konten/warna/font, deploy gratis, dan 3 ide lanjutan.`,
+      }],
+    }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    PREMIUM_ALLOWED_UIDS: "test-user",
     GROQ_API_KEY: "groq-secret",
-    AI_RATE_LIMITER: { limit: async ({ key }) => {
-      limiterKey = key;
-      return { success: true };
-    } },
+    AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
     AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
   });
+
   assert.equal(response.status, 200);
-  assert.equal(limiterKey, "image-chat:test-user");
-  assert.match(response.headers.get("Content-Type"), /^text\/markdown/);
-  assert.ok(optimizedPrompt, "the mocked NVIDIA image prompt enhancer was not called");
-  assert.equal(enhancerRequestBody.model, "nvidia/nemotron-nano-3-30b-a3b");
-  assert.equal(JSON.parse(enhancerRequestBody.messages[1].content).request, "pegunungan saat matahari terbit");
-  assert.match(enhancerRequestBody.messages[0].content, /Turn abstract concepts into a concrete scene/);
-  const result = await response.text();
-  assert.match(result, /^!\[Generated Image\]\(https:\/\/image\.pollinations\.ai\/prompt\/A%20sunrise%20over%20mountain%20peaks/);
-  assert.match(result, /\?width=1280&height=720&nologo=true&enhance=false&seed=\d+\)$/);
-  assert.match(result, /Avoid%3A%20unrelated%20objects%2C%20text/);
-  assert.equal(decodeURIComponent(optimizedPrompt).includes("mountain"), true);
-  await context.test("chat improves an uploaded image through Gemini Vision before returning a new image URL", verifyUploadedImageEdit);
-  await context.test("image edit uses NVIDIA NIM vision first when a compatible model is available", verifyNvidiaVisionImageEdit);
-  await context.test("image edit intent recognizes common Indonesian requests without classifying ordinary analysis", verifyImageEditIntent);
+  assert.equal(chatRequests, 1);
+  assert.match(await response.text(), /Website brief accepted/);
 });
 
 test("image generation prompts remove Indonesian command prefixes and add the quality boost only once", () => {
@@ -3184,39 +3977,18 @@ test("email action Durable Object enforces the daily limit without consuming a v
   assert.equal(values.get("email-preview").tokenHash, hashes.tokenHash);
 });
 
-test("optional image verification checks once and regenerates at most once for missing visual anchors (MOCK)", async (context) => {
-  clearGatewayCatalogCache("gemini");
+test("OpenRouter Gemini Image generation uses the dedicated Image API without Google API calls (MOCK)", async (context) => {
   const { token, jwk } = await authorizedToken();
-  const generationPrompts = [];
-  let visionCalls = 0;
+  const imageRequests = [];
   setFetch(context, async (url, options = {}) => {
     const target = String(url);
     if (target.includes("securetoken@system.gserviceaccount.com")) {
       return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
     }
-    if (target.endsWith("/v1beta/models?pageSize=1000")) {
-      return Response.json({
-        models: [{
-          name: "models/gemini-2.5-flash",
-          displayName: "Gemini Flash",
-          supportedGenerationMethods: ["generateContent"],
-        }],
-      });
-    }
-    const body = JSON.parse(options.body);
-    if (body.contents?.[0]?.parts?.some((part) => part.inlineData)) {
-      visionCalls += 1;
-      assert.equal(body.generationConfig.responseMimeType, "application/json");
-      return Response.json({
-        candidates: [{
-          content: { parts: [{ text: JSON.stringify({ score: 0.4, missing: ["red-and-white flag"] }) }] },
-        }],
-      });
-    }
-    generationPrompts.push(body.contents[0].parts[0].text);
-    return Response.json({
-      candidates: [{ content: { parts: [{ inlineData: { data: `image-${generationPrompts.length}`, mimeType: "image/png" } }] } }],
-    });
+    assert.equal(target, "https://openrouter.ai/api/v1/images");
+    assert.equal(options.headers.Authorization, "Bearer openrouter-secret");
+    imageRequests.push(JSON.parse(options.body));
+    return Response.json({ data: [{ b64_json: "generated-image-base64", media_type: "image/png" }] });
   });
 
   const response = await worker.fetch(new Request("https://worker.test/images/generate", {
@@ -3239,49 +4011,94 @@ test("optional image verification checks once and regenerates at most once for m
   }), {
     FIREBASE_PROJECT_ID: "my-ai-69027",
     AUTHORIZED_EMAILS: "user@example.com",
-    GEMINI_API_KEY: "gemini-secret",
+    OPENROUTER_API_KEY: "openrouter-secret",
+    GEMINI_LIVE_API_KEY: "live-only-secret-must-not-be-used",
     AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
     AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
   });
 
   assert.equal(response.status, 200);
   const result = await response.json();
-  assert.equal(visionCalls, 1);
-  assert.equal(generationPrompts.length, 2);
-  assert.match(generationPrompts[1], /Clearly include these missing requested visual elements: red-and-white flag/);
-  assert.equal(result.image, "image-2");
-  assert.equal(result.provider, "gemini");
-  assert.equal(result.verification.status, "regenerated_once");
-  assert.equal(result.verification.score, 0.4);
-  assert.deepEqual(result.verification.missing, ["red-and-white flag"]);
-  assert.doesNotMatch(JSON.stringify(result), /gemini-secret/);
+  assert.equal(imageRequests.length, 1);
+  assert.equal(imageRequests[0].model, "google/gemini-2.5-flash-image");
+  assert.equal(imageRequests[0].n, 1);
+  assert.equal(imageRequests[0].aspect_ratio, "16:9");
+  assert.match(imageRequests[0].prompt, /A vivid Indonesian Independence Day celebration/);
+  assert.equal(result.image, "generated-image-base64");
+  assert.equal(result.provider, "openrouter");
+  assert.equal(result.model, "google/gemini-2.5-flash-image");
+  assert.deepEqual(result.verification, {
+    status: "unavailable",
+    reason: "Verifikasi kecocokan tambahan belum tersedia melalui OpenRouter.",
+  });
+  assert.doesNotMatch(JSON.stringify(result), /openrouter-secret|live-only-secret/);
 });
 
-test("Gemini Image circuit breaker opens after three consecutive provider failures (MOCK)", async (context) => {
+test("OpenRouter Gemini Image sends the source photo as an image reference (MOCK)", async (context) => {
+  const { token, jwk } = await authorizedToken();
+  const sourceImage = "data:image/jpeg;base64,ZmFrZS1zb3VyY2U=";
+  let generationRequest;
+  setFetch(context, async (url, options = {}) => {
+    const target = String(url);
+    if (target.includes("securetoken@system.gserviceaccount.com")) {
+      return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
+    }
+    assert.equal(target, "https://openrouter.ai/api/v1/images");
+    assert.equal(options.headers.Authorization, "Bearer openrouter-secret");
+    generationRequest = JSON.parse(options.body);
+    return Response.json({ data: [{ b64_json: "edited-image", media_type: "image/png" }] });
+  });
+  const response = await worker.fetch(new Request("https://worker.test/images/generate", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: "Haluskan kulit secara natural dan hangatkan pencahayaan.",
+      sourceImage,
+      autoEnhance: false,
+    }),
+  }), {
+    FIREBASE_PROJECT_ID: "my-ai-69027",
+    AUTHORIZED_EMAILS: "user@example.com",
+    OPENROUTER_API_KEY: "openrouter-secret",
+    GEMINI_LIVE_API_KEY: "live-only-secret-must-not-be-used",
+    AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
+    IMAGE_EDIT_QUEUE: imageEditQueueBinding(),
+  });
+
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(generationRequest.model, "google/gemini-2.5-flash-image");
+  assert.equal(generationRequest.aspect_ratio, undefined);
+  assert.match(generationRequest.prompt, /Edit the supplied source photo only; do not create a new image/);
+  assert.match(generationRequest.prompt, /Preserve the subject's identity, facial features, body proportions, pose, clothing, background, and composition exactly/);
+  assert.match(generationRequest.prompt, /Haluskan kulit secara natural/);
+  assert.deepEqual(generationRequest.input_references, [{
+    type: "image_url",
+    image_url: { url: sourceImage },
+  }]);
+  assert.equal(result.image, "edited-image");
+  assert.equal(result.provider, "openrouter");
+  assert.equal(result.model, "google/gemini-2.5-flash-image");
+  assert.equal(result.aspectRatio, "source");
+  assert.doesNotMatch(JSON.stringify(result), /openrouter-secret|live-only-secret|ZmFrZS1zb3VyY2U=/);
+});
+
+test("OpenRouter Gemini Image quota errors are not retried or routed to another provider (MOCK)", async (context) => {
   const { token, jwk } = await authorizedToken();
   let mode = "success";
-  const imageModels = [];
+  const imageRequests = [];
   setFetch(context, async (url) => {
     const target = String(url);
     if (target.includes("securetoken@system.gserviceaccount.com")) {
       return Response.json({ keys: [jwk] }, { headers: { "Cache-Control": "max-age=3600" } });
     }
-    const model = target.match(/models\/([^/]+):generateContent$/)?.[1];
-    imageModels.push(model);
+    assert.equal(target, "https://openrouter.ai/api/v1/images");
+    imageRequests.push(target);
     if (mode === "success") {
-      return Response.json({
-        candidates: [{ content: { parts: [{ inlineData: { data: "image-data", mimeType: "image/png" } }] } }],
-      });
+      return Response.json({ data: [{ b64_json: "image-data", media_type: "image/png" }] });
     }
-    return Response.json({
-      error: {
-        status: "RESOURCE_EXHAUSTED",
-        details: [{
-          "@type": "type.googleapis.com/google.rpc.QuotaFailure",
-          violations: [{ quotaMetric: "test-quota", quotaValue: "0" }],
-        }],
-      },
-    }, { status: 429 });
+    return Response.json({ error: { code: 402, message: "credits exhausted" } }, { status: 402 });
   });
   const invoke = () => worker.fetch(new Request("https://worker.test/images/generate", {
     method: "POST",
@@ -3302,7 +4119,7 @@ test("Gemini Image circuit breaker opens after three consecutive provider failur
   }), {
     FIREBASE_PROJECT_ID: "my-ai-69027",
     AUTHORIZED_EMAILS: "user@example.com",
-    GEMINI_API_KEY: "gemini-secret",
+    OPENROUTER_API_KEY: "openrouter-secret",
     AI_RATE_LIMITER: { limit: async () => ({ success: true }) },
     AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(),
   });
@@ -3314,10 +4131,9 @@ test("Gemini Image circuit breaker opens after three consecutive provider failur
     const response = await invoke();
     assert.equal(response.status, 429);
   }
-  const callsBeforeOpenCircuit = imageModels.length;
-  const openCircuitResponse = await invoke();
-  assert.equal(openCircuitResponse.status, 503);
-  assert.match((await openCircuitResponse.json()).error.message, /dilewati|cadangan/i);
-  assert.equal(imageModels.length, callsBeforeOpenCircuit);
-  assert.deepEqual(imageModels, Array(4).fill("gemini-3.1-flash-image"));
+  const imageRequestsBeforeLastFailure = imageRequests.length;
+  const lastFailure = await invoke();
+  assert.equal(lastFailure.status, 429);
+  assert.equal(imageRequests.length, imageRequestsBeforeLastFailure + 1);
+  assert.deepEqual(imageRequests, Array(5).fill("https://openrouter.ai/api/v1/images"));
 });

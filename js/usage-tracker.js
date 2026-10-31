@@ -2,6 +2,19 @@ const STORAGE_KEY = "myai_usage_tracker_v1";
 const SESSION_KEY = "myai_usage_session_v1";
 const EXHAUSTED_TTL_MS = 30 * 60 * 1000;
 const DEGRADED_TTL_MS = 5 * 60 * 1000;
+const SUPPORTED_PROVIDERS = new Set([
+  "claude",
+  "explorium",
+  "gemini",
+  "gemini-live",
+  "groq",
+  "guest",
+  "kimi",
+  "monid",
+  "nvidia",
+  "openrouter",
+  "pollinations",
+]);
 
 function emptyTotals() {
   return { promptTokens: 0, completionTokens: 0, totalTokens: 0, providers: Object.create(null) };
@@ -55,10 +68,13 @@ function normalizeProvider(provider) {
 function normalizeTotals(value) {
   const totals = emptyTotals();
   if (!value || typeof value !== "object") return totals;
-  totals.promptTokens = safeTokenCount(value.promptTokens);
-  totals.completionTokens = safeTokenCount(value.completionTokens);
-  totals.totalTokens = totals.promptTokens + totals.completionTokens;
+  let removedProvider = false;
   for (const [provider, counts] of Object.entries(value.providers || {})) {
+    const name = normalizeProvider(provider);
+    if (!SUPPORTED_PROVIDERS.has(name)) {
+      removedProvider = true;
+      continue;
+    }
     const normalized = emptyTotals();
     normalized.promptTokens = safeTokenCount(counts?.promptTokens);
     normalized.completionTokens = safeTokenCount(counts?.completionTokens);
@@ -71,8 +87,16 @@ function normalizeTotals(value) {
         totalTokens: safeTokenCount(modelCounts?.promptTokens) + safeTokenCount(modelCounts?.completionTokens),
       };
     }
-    totals.providers[normalizeProvider(provider)] = normalized;
+    totals.providers[name] = normalized;
   }
+  if (removedProvider) {
+    totals.promptTokens = Object.values(totals.providers).reduce((sum, provider) => sum + provider.promptTokens, 0);
+    totals.completionTokens = Object.values(totals.providers).reduce((sum, provider) => sum + provider.completionTokens, 0);
+  } else {
+    totals.promptTokens = safeTokenCount(value.promptTokens);
+    totals.completionTokens = safeTokenCount(value.completionTokens);
+  }
+  totals.totalTokens = totals.promptTokens + totals.completionTokens;
   return totals;
 }
 
@@ -171,6 +195,12 @@ export function createUsageTracker({
   function getHealth() {
     const data = readPersistent();
     let changed = false;
+    for (const provider of Object.keys(data.health)) {
+      if (!SUPPORTED_PROVIDERS.has(normalizeProvider(provider))) {
+        delete data.health[provider];
+        changed = true;
+      }
+    }
     for (const [provider, state] of Object.entries(data.health)) {
       if (state?.expiresAt && state.expiresAt <= now()) {
         data.health[provider] = {
@@ -218,7 +248,8 @@ export function createUsageTracker({
       .map(([id, totals]) => [id.slice(0, 160), normalizeTotals(totals)]));
     const allowed = new Set(["IDLE", "CHECKING", "HEALTHY", "DEGRADED", "ERROR", "EXHAUSTED", "UNREACHABLE"]);
     data.health = Object.fromEntries(Object.entries(data.health)
-      .filter(([, state]) => state && typeof state === "object" && allowed.has(state.status))
+      .filter(([provider, state]) => SUPPORTED_PROVIDERS.has(normalizeProvider(provider))
+        && state && typeof state === "object" && allowed.has(state.status))
       .map(([provider, state]) => [normalizeProvider(provider), {
         status: state.status,
         updatedAt: Number.isFinite(Number(state.updatedAt)) ? Number(state.updatedAt) : now(),

@@ -10,7 +10,6 @@ import {
   listGuestModels,
   listServerModels,
   normalizeChatMessages,
-  regeneratePollinationsUrl,
   saveSettings,
   streamChat,
 } from "./providers.js";
@@ -143,18 +142,18 @@ test("guest model catalog persists while ephemeral trial quota is not cached", a
   assert.equal(stale.errors.length, 1);
 });
 
-test("image generation providers cannot be used by the text chat pipeline", async () => {
-  await assert.rejects(async () => {
-    for await (const _chunk of streamChat("pollinations", "flux", [
-      { role: "user", content: "Write a portfolio website." },
-    ], {}, new AbortController().signal)) {}
-  }, /tidak dapat digunakan untuk chat teks/i);
-
-  await assert.rejects(async () => {
-    for await (const _chunk of streamChat("pollinations", "flux", [
-      { role: "user", content: "Write a portfolio website." },
-    ], {}, new AbortController().signal)) {}
-  }, /tidak dapat digunakan untuk chat teks/i);
+test("Pollinations and chat providers cannot generate images", async () => {
+  for (const [provider, options] of [
+    ["pollinations", {}],
+    ["gemini", { imageGeneration: true }],
+    ["groq", { generateImage: true }],
+  ]) {
+    await assert.rejects(async () => {
+      for await (const _chunk of streamChat(provider, "test-model", [
+        { role: "user", content: "Create an image of a robot." },
+      ], options, new AbortController().signal)) {}
+    }, /hanya tersedia melalui Gemini Image/i);
+  }
 });
 
 test("gateway SSE releases its reader lock and request guard after provider errors", async (context) => {
@@ -209,12 +208,13 @@ test("custom AI personas survive local settings reload", (context) => {
   assert.equal(loadSettings().persona, "general");
 });
 
-test("gateway stream forwards reported usage without dropping answer content", async (context) => {
+test("gateway stream forwards answer, truncation, and usage events", async (context) => {
   setFetch(context, async (url, options) => {
     assert.equal(url, "/api/gateway");
     assert.equal(JSON.parse(options.body).allowFallback, true);
     return new Response([
       'data: {"choices":[{"delta":{"content":"Answer"}}]}',
+      'data: {"type":"truncated","truncated":true}',
       'data: {"type":"usage","tokens":{"prompt_tokens":120,"completion_tokens":9,"total_tokens":129}}',
       'data: {"type":"metrics","tokens":129,"completion_tokens":9,"duration_ms":700,"model":"test-model"}',
       'data: {"type":"provider-health","provider":"groq","model":"test-model","status":"HEALTHY","latencyMs":140}',
@@ -230,10 +230,22 @@ test("gateway stream forwards reported usage without dropping answer content", a
 
   assert.deepEqual(chunks, [
     { content: "Answer" },
+    { truncated: true },
     { usage: { promptTokens: 120, completionTokens: 9, totalTokens: 129 } },
     { metrics: { tokens: 129, completionTokens: 9, durationMs: 700, model: "test-model" } },
     { providerHealth: { provider: "groq", model: "test-model", status: "HEALTHY", detail: "", latencyMs: 140 } },
   ]);
+});
+
+test("direct Gemini chat is blocked before the browser makes an API request", async () => {
+  await assert.rejects(async () => {
+    for await (const _chunk of streamChat(
+      "gateway-gemini",
+      "gemini-test",
+      [{ role: "user", content: "Try a fallback." }],
+      { authToken: "test-token" },
+    )) {}
+  }, /Chat langsung Google Gemini tidak tersedia/);
 });
 
 test("gateway stream forwards routing metadata and token throughput", async (context) => {
@@ -284,7 +296,7 @@ test("image prompt enhancement preserves NVIDIA NIM route metadata", async (cont
     assert.match(url, /\/enhance-prompt$/);
     assert.equal(JSON.parse(options.body).mode, "image");
     return Response.json({
-      prompt: "A detailed golden-hour landscape with mountains and a reflective lake.",
+      prompt: "A majestic mountain range at sunrise, the first golden light breaking over jagged peaks and spilling across a high alpine valley, soft morning mist pooling in the valleys below, a winding trail leading toward the slopes, scattered pine trees on the lower ridges, warm amber and rose light against cool blue shadows, layered ridgelines fading into the distance, dramatic wide cinematic composition, crisp atmospheric depth, photorealistic landscape, no text.",
       negative: "text, watermark",
       aspect: "16:9",
       style: "cinematic",
@@ -299,6 +311,24 @@ test("image prompt enhancement preserves NVIDIA NIM route metadata", async (cont
   assert.equal(result.enhanced, true);
   assert.equal(result.enhancer, "nvidia");
   assert.equal(result.enhancerModel, "nvidia/nemotron-nano");
+});
+
+test("image prompt enhancement preserves metadata for every supported cloud provider", async (context) => {
+  setFetch(context, async () => Response.json({
+    prompt: "A sweeping panoramic landscape of rolling green hills under a bright blue sky, a calm river winding through the valley toward a distant village with small red-roofed houses, scattered oak trees casting long soft shadows, wildflowers in white and yellow dotting the meadows in the foreground, warm afternoon sunlight streaming from the left with gentle golden highlights, a few birds gliding high above the treeline, a light breeze moving through the tall grass, golden light glittering on the water surface, soft cumulus clouds drifting slowly across the sky, the distant hills layered in hazy blue tones for depth, a dirt path curving along the riverbank, rich green and gold palette with cool blue accents, wide cinematic composition with a low horizon line, deep depth of field keeping both the foreground flowers and the distant village sharp, natural atmosphere, gentle reflections of the clouds on the calm water, warm earthy tones in the dirt path, dewy grass sparkling in the sunlight, a wooden fence running along the hillside, the peaceful mood of a late summer afternoon, photorealistic landscape photography style, no text.",
+    negative: "",
+    aspect: "16:9",
+    style: "cinematic",
+    assumptions: "Pemandangan umum.",
+    enhanced: true,
+    enhancer: "groq",
+    enhancerModel: "llama-3.1-8b-instant",
+  }));
+
+  const result = await enhanceImagePrompt("buat pemandangan", { authToken: "test-token" });
+  assert.equal(result.enhanced, true);
+  assert.equal(result.enhancer, "groq");
+  assert.equal(result.enhancerModel, "llama-3.1-8b-instant");
 });
 
 test("REST model responses forward provider-reported token usage", async (context) => {
@@ -321,66 +351,6 @@ test("REST model responses forward provider-reported token usage", async (contex
   ]);
 });
 
-test("Pollinations model returns a direct image URL without calling the API server", async (context) => {
-  setFetch(context, async () => { throw new Error("Pollinations direct mode must not call fetch."); });
-
-  const chunks = [];
-  for await (const chunk of streamChat("pollinations", "flux", [
-    { role: "user", content: "draw a red robot" },
-  ], { imageGeneration: true })) chunks.push(chunk);
-
-  const imageUrl = new URL(chunks[0].image);
-  assert.match(decodeURIComponent(imageUrl.pathname), /^\/prompt\/A clear, coherent illustration centered on/);
-  assert.match(imageUrl.pathname, /red%20robot/i);
-  assert.equal(imageUrl.searchParams.get("model"), "flux");
-  assert.match(imageUrl.search, /width=1024&height=1024/);
-  assert.equal(imageUrl.searchParams.get("enhance"), "false");
-  assert.match(chunks[1].content, /red robot/);
-});
-
-test("Pollinations image retry changes only the seed on a trusted image URL", () => {
-  const oldRandom = Math.random;
-  Math.random = () => 0.123456;
-  try {
-    const retryUrl = new URL(regeneratePollinationsUrl(
-      "https://image.pollinations.ai/prompt/robot?width=1024&height=1024&seed=12&enhance=true",
-    ));
-    assert.equal(retryUrl.hostname, "image.pollinations.ai");
-    assert.equal(retryUrl.pathname, "/prompt/robot");
-    assert.equal(retryUrl.searchParams.get("width"), "1024");
-    assert.equal(retryUrl.searchParams.get("height"), "1024");
-    assert.equal(retryUrl.searchParams.get("enhance"), "true");
-    assert.equal(retryUrl.searchParams.get("seed"), "123456");
-  } finally {
-    Math.random = oldRandom;
-  }
-  assert.throws(() => regeneratePollinationsUrl("https://attacker.example/prompt/robot"), /URL Pollinations yang valid/);
-});
-
-test("image-generation chat accepts only Markdown URLs from Pollinations", async (context) => {
-  let fetchHandler = async () => new Response(
-    "![Generated Image](https://image.pollinations.ai/prompt/robot?width=1024&height=1024&seed=1)",
-    { headers: { "Content-Type": "text/markdown" } },
-  );
-  setFetch(context, (...args) => fetchHandler(...args));
-
-  const chunks = [];
-  for await (const chunk of streamChat("gemini", "flux", [
-    { role: "user", content: "create an image of a robot" },
-  ], { authToken: "test-token", imageGeneration: true })) chunks.push(chunk);
-  assert.equal(chunks[0].image, "https://image.pollinations.ai/prompt/robot?width=1024&height=1024&seed=1");
-
-  fetchHandler = async () => new Response(
-    "![Generated Image](https://attacker.example/image.png)",
-    { headers: { "Content-Type": "text/markdown" } },
-  );
-  await assert.rejects(async () => {
-    for await (const _chunk of streamChat("gemini", "flux", [
-      { role: "user", content: "create an image of a robot" },
-    ], { authToken: "test-token", imageGeneration: true })) {}
-  }, /URL gambar Pollinations yang valid/);
-});
-
 test("performance analytics preference defaults on and persists when turned off", () => {
   const oldStorage = globalThis.localStorage;
   const storage = new MemoryStorage();
@@ -392,6 +362,23 @@ test("performance analytics preference defaults on and persists when turned off"
     assert.equal(loadSettings().showPerformanceAnalytics, false);
     saveSettings({ ...loadSettings(), showPerformanceAnalytics: true });
     assert.equal(loadSettings().showPerformanceAnalytics, true);
+  } finally {
+    globalThis.localStorage = oldStorage;
+  }
+});
+
+test("settings migrate known default prompts but preserve user custom instructions", () => {
+  const oldStorage = globalThis.localStorage;
+  const storage = new MemoryStorage();
+  globalThis.localStorage = storage;
+  try {
+    storage.setItem("myai_settings", JSON.stringify({
+      systemPrompt: "Jawablah secara ramah, jelas, dan natural. Utamakan jawaban yang sesuai kebutuhan pengguna.",
+    }));
+    assert.match(loadSettings().systemPrompt, /Ikuti instruksi inti MyAI/);
+
+    storage.setItem("myai_settings", JSON.stringify({ systemPrompt: "Always answer in concise Indonesian." }));
+    assert.equal(loadSettings().systemPrompt, "Always answer in concise Indonesian.");
   } finally {
     globalThis.localStorage = oldStorage;
   }

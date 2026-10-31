@@ -1,18 +1,24 @@
-import { AI_API_URL } from "./config.js?v=20261020-v5.29";
+import { AI_API_URL } from "./config.js?v=20261029-v5.130";
+import { fetchAiApi } from "./api-client.js?v=20261029-v5.130";
 import {
   buildFallbackImagePromptPlan,
   cleanImageGenerationPrompt,
   validateImagePromptPlan,
-} from "./image-prompts.js";
+} from "./image-prompts.js?v=20261029-v5.130";
+import { MODEL_MENU_PROVIDERS } from "../shared/model-catalog.js?v=20261029-v5.130";
 
 const WORKER_MODEL_TIMEOUT_MS = 45000;
 const CHAT_STREAM_IDLE_TIMEOUT_MS = 45000;
 const SETTINGS_KEY = "myai_settings";
 const GUEST_DEVICE_ID_STORAGE_KEY = "myai_guest_device_id_v1";
 const LEGACY_DEFAULT_SYSTEM_PROMPT = "Kamu adalah asisten AI yang ramah, cerdas, dan membantu. Berkomunikasilah secara natural, hangat, dan relevan seperti teman bicara yang baik; pahami konteks percakapan sebelumnya dan tanyakan klarifikasi hanya bila memang diperlukan. Jawab dalam bahasa yang dipakai pengguna. Gunakan Markdown untuk format, dan tulis rumus matematika dengan LaTeX ($...$ atau $$...$$).";
+const PREVIOUS_DEFAULT_SYSTEM_PROMPTS = new Set([
+  LEGACY_DEFAULT_SYSTEM_PROMPT,
+  "Jawablah secara ramah, jelas, dan natural. Utamakan jawaban yang sesuai kebutuhan pengguna.",
+]);
 export const DEFAULT_SETTINGS = {
   showPaid: false,
-  systemPrompt: "Jawablah secara ramah, jelas, dan natural. Utamakan jawaban yang sesuai kebutuhan pengguna.",
+  systemPrompt: "Ikuti instruksi inti MyAI. Sesuaikan bahasa, kedalaman, dan format dengan kebutuhan. Jaga akurasi, hindari pengulangan, dan gunakan hanya fitur yang benar-benar tersedia.",
   temperature: 0.7,
   about: "",
   persona: "balanced",
@@ -38,7 +44,7 @@ export function loadSettings() {
       return {
         ...DEFAULT_SETTINGS,
         showPaid: saved.showPaid === true,
-        systemPrompt: typeof saved.systemPrompt === "string" && saved.systemPrompt !== LEGACY_DEFAULT_SYSTEM_PROMPT
+        systemPrompt: typeof saved.systemPrompt === "string" && !PREVIOUS_DEFAULT_SYSTEM_PROMPTS.has(saved.systemPrompt)
           ? saved.systemPrompt
           : DEFAULT_SETTINGS.systemPrompt,
         temperature: Number.isFinite(Number(saved.temperature)) ? Math.min(1.5, Math.max(0, Number(saved.temperature))) : DEFAULT_SETTINGS.temperature,
@@ -152,7 +158,7 @@ async function loadGuestTurnstile() {
 
 async function guestRequestHeaders(apiBase, { json = true } = {}) {
   const deviceId = getGuestDeviceId();
-  const configResponse = await fetch(`${apiBase}/guest/config`, { cache: "no-store" });
+  const configResponse = await fetchAiApi("guest/config", { cache: "no-store" }, { baseUrl: apiBase });
   if (!configResponse.ok) throw new Error(await errorText(configResponse));
   const config = await configResponse.json();
   if (typeof config.turnstileSiteKey !== "string" || !config.turnstileSiteKey) {
@@ -336,6 +342,12 @@ async function* readSSE(res, requestGuard) {
         model: typeof event.model === "string" ? event.model : "",
       };
     }
+    if (event.type === "truncated"
+      || event.choices?.some((choice) => choice.finish_reason === "length")
+      || event.candidates?.some((candidate) => candidate.finishReason === "MAX_TOKENS")
+      || event.type === "message_delta" && event.delta?.stop_reason === "max_tokens") {
+      event.myaiTruncated = true;
+    }
     if (event.type === "route" && typeof event.provider === "string"
       && typeof event.model === "string") {
       event.myaiRoute = {
@@ -430,7 +442,7 @@ export async function listServerModels(authToken, { includeCatalog = false, forc
     const timeout = setTimeout(() => controller.abort(), WORKER_MODEL_TIMEOUT_MS);
     let response;
     try {
-      response = await fetch(`${apiBase}/models`, {
+      response = await fetchAiApi("models", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -438,7 +450,7 @@ export async function listServerModels(authToken, { includeCatalog = false, forc
         },
         body: JSON.stringify({ includeCatalog }),
         signal: controller.signal,
-      });
+      }, { baseUrl: apiBase });
     } catch (error) {
       if (error?.name === "AbortError") {
         throw new Error("Koneksi ke API Cloudflare Pages melewati batas 45 detik. Coba muat ulang dan periksa status Pages.");
@@ -492,12 +504,12 @@ export async function listGuestModels({ force = false } = {}) {
     const timeout = setTimeout(() => controller.abort(), WORKER_MODEL_TIMEOUT_MS);
     let response;
     try {
-      response = await fetch(`${apiBase}/guest/models`, {
+      response = await fetchAiApi("guest/models", {
         method: "POST",
         headers: await guestRequestHeaders(apiBase),
         body: "{}",
         signal: controller.signal,
-      });
+      }, { baseUrl: apiBase });
     } catch (error) {
       if (error?.name === "AbortError") throw new Error("Katalog AI guest melewati batas waktu 45 detik.");
       throw error;
@@ -541,12 +553,12 @@ async function* guestStream(model, messages, opts, signal) {
   if (new TextEncoder().encode(body).byteLength > 2 * 1024 * 1024) {
     throw new Error("Prompt AI guest terlalu besar. Ringkas teks atau kurangi gambar.");
   }
-  const response = await fetch(`${apiBase}/guest/chat`, {
+  const response = await fetchAiApi("guest/chat", {
     method: "POST",
     signal,
   headers: await guestRequestHeaders(apiBase),
     body,
-  });
+  }, { baseUrl: apiBase });
   if (!response.ok) throw new Error(await errorText(response));
   const remaining = Number(response.headers.get("X-Guest-Remaining"));
   if (Number.isInteger(remaining) && remaining >= 0 && remaining <= 2) {
@@ -559,6 +571,7 @@ async function* guestStream(model, messages, opts, signal) {
     if (chunk.error) throw new Error(chunk.error.message || "AI guest gagal menjawab.");
     if (chunk.myaiUsage) yield { usage: chunk.myaiUsage };
     if (chunk.myaiMetrics) yield { metrics: chunk.myaiMetrics };
+    if (chunk.myaiTruncated) yield { truncated: true };
     if (chunk.myaiRoute) yield { route: chunk.myaiRoute };
     if (chunk.myaiFallback) yield { fallback: chunk.myaiFallback };
     if (chunk.myaiProviderHealth) yield { providerHealth: chunk.myaiProviderHealth };
@@ -572,16 +585,6 @@ async function* guestStream(model, messages, opts, signal) {
       yield { content: chunk.content };
       continue;
     }
-    const geminiParts = chunk.candidates?.[0]?.content?.parts || [];
-    for (const source of chunk.candidates?.[0]?.groundingMetadata?.groundingChunks || []) {
-      if (source.web?.uri) yield { citation: { url: source.web.uri, title: source.web.title } };
-    }
-    if (geminiParts.length) {
-      for (const part of geminiParts) {
-        if (part.text) yield part.thought ? { reasoning: part.text } : { content: part.text };
-      }
-      continue;
-    }
     const delta = chunk.choices?.[0]?.delta;
     if (delta?.reasoning) yield { reasoning: delta.reasoning };
     const content = delta?.content;
@@ -592,97 +595,6 @@ async function* guestStream(model, messages, opts, signal) {
       if (text) yield { content: text };
     }
   }
-}
-
-function parsePollinationsMarkdownImage(markdownImage) {
-  const match = String(markdownImage || "").trim().match(/^!\[Generated Image\]\((https:\/\/[^\s)]+)\)$/);
-  if (!match) return null;
-  try {
-    const url = new URL(match[1]);
-    if (!["image.pollinations.ai", "gen.pollinations.ai"].includes(url.hostname)
-      || url.protocol !== "https:"
-      || url.username
-      || url.password) return null;
-    return url.href;
-  } catch {
-    return null;
-  }
-}
-
-export function regeneratePollinationsUrl(source) {
-  const url = new URL(source);
-  if (url.protocol !== "https:" || url.hostname !== "image.pollinations.ai" || !url.pathname.startsWith("/prompt/")) {
-    throw new Error("Sumber gambar bukan URL Pollinations yang valid.");
-  }
-  url.searchParams.set("seed", String(Math.floor(Math.random() * 1_000_000)));
-  return url.href;
-}
-
-function pollinationsSize(prompt) {
-  if (/\b(landscape|lanskap|wide|lebar|banner|wallpaper desktop|16:9|pemandangan|pegunungan|panorama|mountains?)\b/i.test(prompt)) return [1280, 720];
-  if (/\b(portrait|potret|vertikal|vertical|poster|story|9:16|wallpaper hp)\b/i.test(prompt)) return [768, 1344];
-  return [1024, 1024];
-}
-
-async function waitForPollinationsImage(url, signal) {
-  if (typeof Image !== "function") return;
-  await new Promise((resolve, reject) => {
-    const image = new Image();
-    const timeout = setTimeout(() => finish(new Error("Pollinations belum mengirim gambar dalam 90 detik.")), 90000);
-    const finish = (error) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      image.onload = null;
-      image.onerror = null;
-      error ? reject(error) : resolve();
-    };
-    const onAbort = () => finish(new DOMException("Aborted", "AbortError"));
-    image.onload = () => finish();
-    image.onerror = () => finish(new Error("Pollinations gagal membuat atau memuat gambar. Coba lagi atau pilih model lain."));
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) return onAbort();
-    image.src = url;
-    if (image.complete && image.naturalWidth > 0) finish();
-  });
-}
-
-async function* pollinationsStream(model, messages, opts, signal) {
-  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-  const userPrompt = cleanImageGenerationPrompt(
-    String([...messages].reverse().find((message) => message.role === "user")?.content || ""),
-  ).slice(0, 1200);
-  if (!userPrompt) throw new Error("Tulis deskripsi gambar terlebih dahulu.");
-  const imagePlan = validateImagePromptPlan(opts?.imagePromptPlan, userPrompt);
-  const basePrompt = imagePlan.prompt.replace(/[. ]+$/, "");
-  const prompt = imagePlan.negative ? `${basePrompt}. Avoid: ${imagePlan.negative}.` : basePrompt;
-  const dimensions = { "16:9": [1280, 720], "9:16": [768, 1344], "1:1": [1024, 1024] };
-  const [width, height] = opts?.imageFallbackResolution === "768x768"
-    ? [768, 768]
-    : dimensions[imagePlan.aspect] || pollinationsSize(userPrompt);
-  const seed = Math.floor(Math.random() * 1_000_000);
-  const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${width}&height=${height}&model=${encodeURIComponent(model)}&nologo=true&enhance=false&seed=${seed}`;
-  await waitForPollinationsImage(imageUrl, signal);
-  yield {
-    image: imageUrl,
-    imageMetadata: {
-      provider: "pollinations",
-      model,
-      modelLabel: model === "turbo" ? "Turbo (Pollinations)" : "Flux (Pollinations)",
-      prompt,
-      negative: imagePlan.negative,
-      style: imagePlan.style,
-      aspect: imagePlan.aspect,
-      assumptions: imagePlan.assumptions,
-      enhanced: opts?.imagePromptPlan?.enhanced === true,
-      enhancer: opts?.imagePromptPlan?.enhancer === "groq" ? "groq" : "local",
-      enhancerModel: typeof opts?.imagePromptPlan?.enhancerModel === "string"
-        ? opts.imagePromptPlan.enhancerModel
-        : "deterministic-fallback",
-      ...(typeof opts?.imagePromptPlan?.reason === "string" ? { enhancementReason: opts.imagePromptPlan.reason } : {}),
-      ...(opts?.imageFallbackReason ? { fallbackReason: opts.imageFallbackReason } : {}),
-    },
-  };
-  yield { content: `Gambar dibuat dari prompt: *${userPrompt.replace(/[*_`]/g, "")}*` };
 }
 
 export async function enhanceImagePrompt(prompt, {
@@ -699,7 +611,7 @@ export async function enhanceImagePrompt(prompt, {
     return { ...fallback, enhanced: false, enhancer: "local", reason: "Dipakai prompt lokal karena sesi enhancer tidak tersedia." };
   }
   try {
-    const response = await fetch(`${AI_API_URL.replace(/\/+$/, "")}/enhance-prompt`, {
+    const response = await fetchAiApi("enhance-prompt", {
       method: "POST",
       signal: signal && typeof AbortSignal.any === "function"
         ? AbortSignal.any([signal, AbortSignal.timeout(12000)])
@@ -719,7 +631,7 @@ export async function enhanceImagePrompt(prompt, {
     return {
       ...plan,
       enhanced: result.enhanced === true && plan.prompt !== fallback.prompt,
-      enhancer: ["groq", "nvidia"].includes(result.enhancer) ? result.enhancer : "local",
+      enhancer: MODEL_MENU_PROVIDERS.includes(result.enhancer) ? result.enhancer : "local",
       enhancerModel: typeof result.enhancerModel === "string" ? result.enhancerModel : "deterministic-fallback",
       ...(!result.enhanced ? {
         reason: typeof result.reason === "string"
@@ -754,12 +666,12 @@ async function transcribeThroughServer(apiBase, form, authToken, signal) {
     const headers = authToken
       ? { Authorization: `Bearer ${authToken}` }
       : await guestRequestHeaders(apiBase, { json: false });
-    const response = await fetch(`${apiBase}/${guest ? "guest/" : ""}transcribe`, {
+    const response = await fetchAiApi(`${guest ? "guest/" : ""}transcribe`, {
       method: "POST",
       headers,
       body: form,
       signal: controller.signal,
-    });
+    }, { baseUrl: apiBase });
     if (!response.ok) throw new Error(await errorText(response));
     const result = await response.json();
     if (typeof result.text !== "string" || !result.text.trim()) {
@@ -782,8 +694,11 @@ async function transcribeThroughServer(apiBase, form, authToken, signal) {
 }
 
 export async function* streamChat(provider, model, messages, opts, signal) {
-  if (provider === "pollinations" && opts?.imageGeneration !== true) {
-    throw new Error("Model pembuatan gambar tidak dapat digunakan untuk chat teks. Pilih model chat atau aktifkan Mode Gambar.");
+  if (provider === "pollinations" || opts?.imageGeneration === true || opts?.generateImage === true) {
+    throw new Error("Pembuatan dan edit gambar hanya tersedia melalui Gemini Image di OpenRouter.");
+  }
+  if (provider === "gemini" || provider === "gateway-gemini") {
+    throw new Error("Chat langsung Google Gemini tidak tersedia. Pilih provider lain dari katalog MyAI.");
   }
   const normalizedMessages = normalizeChatMessages(messages);
   const requestGuard = createRequestGuard(signal);
@@ -792,8 +707,6 @@ export async function* streamChat(provider, model, messages, opts, signal) {
     let stream;
     if (provider.startsWith("gateway-")) {
       stream = gatewayStream(provider.slice("gateway-".length), model, normalizedMessages, guardedOptions, requestGuard.signal);
-    } else if (provider === "pollinations") {
-      stream = pollinationsStream(model, normalizedMessages, guardedOptions, requestGuard.signal);
     } else if (provider === "guest") {
       stream = guestStream(model, normalizedMessages, guardedOptions, requestGuard.signal);
     } else if (provider.startsWith("manual-")) {
@@ -835,7 +748,7 @@ async function* gatewayStream(provider, model, messages, opts, signal) {
   const apiBase = AI_API_URL.replace(/\/+$/, "");
   let response;
   try {
-    response = await fetch(`${apiBase}/gateway`, {
+    response = await fetchAiApi("gateway", {
       method: "POST",
       signal,
       headers: {
@@ -843,10 +756,11 @@ async function* gatewayStream(provider, model, messages, opts, signal) {
         "Content-Type": "application/json",
       },
       body,
-    });
+    }, { baseUrl: apiBase });
   } catch (error) {
     if (signal?.aborted) throw error;
     if (error?.name === "AbortError") throw new Error("AI gateway melewati batas waktu. Coba lagi.");
+    if (error?.code === "AI_API_UNREACHABLE") throw error;
     throw new Error("AI gateway tidak dapat dijangkau. Periksa route Cloudflare Worker/Pages.");
   }
   if (!response.ok) throw new Error(await errorText(response));
@@ -855,6 +769,7 @@ async function* gatewayStream(provider, model, messages, opts, signal) {
     if (result.error) throw new Error(result.error.message || "Error dari AI gateway.");
     if (result.myaiUsage) yield { usage: result.myaiUsage };
     if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
+    if (result.myaiTruncated) yield { truncated: true };
     if (result.myaiRoute) yield { route: result.myaiRoute };
     if (result.myaiFallback) yield { fallback: result.myaiFallback };
     if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };
@@ -883,9 +798,6 @@ function normalizeUsage(usage) {
 async function* serverStream(provider, model, messages, opts, signal) {
   if (!AI_API_URL) throw new Error("URL API Cloudflare Pages belum diatur di js/config.js.");
   if (!opts.authToken) throw new Error("Masuk dengan Google untuk memakai API AI server.");
-  const imageSize = opts.imageGeneration
-    ? pollinationsSize(String([...messages].reverse().find((message) => message.role === "user")?.content || ""))
-    : null;
   const body = JSON.stringify({
     provider,
     model,
@@ -893,17 +805,13 @@ async function* serverStream(provider, model, messages, opts, signal) {
     temperature: opts.temperature,
     webSearch: opts.webSearch,
     researchMode: opts.researchMode,
-    imageGeneration: opts.imageGeneration,
-    generateImage: opts.generateImage === true,
-    imageModel: opts.imageModel || "flux",
-    ...(imageSize ? { imageWidth: imageSize[0], imageHeight: imageSize[1] } : {}),
     customInstructions: opts.customInstructions,
   });
   if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) {
     throw new Error("Permintaan online maksimal 4 MiB. Hapus beberapa lampiran atau lanjutkan chat baru.");
   }
   const apiBase = AI_API_URL.replace(/\/+$/, "");
-  const response = await fetch(`${apiBase}/chat`, {
+  const response = await fetchAiApi("chat", {
     method: "POST",
     signal,
     headers: {
@@ -911,15 +819,8 @@ async function* serverStream(provider, model, messages, opts, signal) {
       "Content-Type": "application/json",
     },
     body,
-  });
+  }, { baseUrl: apiBase });
   if (!response.ok) throw new Error(await errorText(response));
-
-  if (opts.imageGeneration) {
-    const markdownImage = parsePollinationsMarkdownImage(await response.text());
-    if (!markdownImage) throw new Error("Backend tidak mengembalikan URL gambar Pollinations yang valid.");
-    yield { image: markdownImage };
-    return;
-  }
 
   if (provider === "modelscope") {
     const result = await response.json();
@@ -934,33 +835,11 @@ async function* serverStream(provider, model, messages, opts, signal) {
   }
 
   if (!response.body) throw new Error("Backend AI tidak mengembalikan aliran jawaban.");
-  if (provider === "gemini") {
-    const cited = new Set();
-    for await (const result of readSSE(response, opts.requestGuard)) {
-      if (result.myaiUsage) yield { usage: result.myaiUsage };
-      if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
-      if (result.myaiRoute) yield { route: result.myaiRoute };
-      if (result.myaiFallback) yield { fallback: result.myaiFallback };
-      if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };
-      for (const part of result.candidates?.[0]?.content?.parts || []) {
-        if (!part.text) continue;
-        if (part.thought) yield { reasoning: part.text };
-        else yield { content: part.text };
-      }
-      for (const source of result.candidates?.[0]?.groundingMetadata?.groundingChunks || []) {
-        if (source.web?.uri && !cited.has(source.web.uri)) {
-          cited.add(source.web.uri);
-          yield { citation: { url: source.web.uri, title: source.web.title } };
-        }
-      }
-    }
-    return;
-  }
-
   for await (const result of readSSE(response, opts.requestGuard)) {
     if (result.error) throw new Error(result.error.message || "Error dari server provider.");
     if (result.myaiUsage) yield { usage: result.myaiUsage };
     if (result.myaiMetrics) yield { metrics: result.myaiMetrics };
+    if (result.myaiTruncated) yield { truncated: true };
     if (result.myaiRoute) yield { route: result.myaiRoute };
     if (result.myaiFallback) yield { fallback: result.myaiFallback };
     if (result.myaiProviderHealth) yield { providerHealth: result.myaiProviderHealth };

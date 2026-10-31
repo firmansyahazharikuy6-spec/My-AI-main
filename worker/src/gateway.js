@@ -5,20 +5,24 @@ import {
   makeUpstreamRequest,
   streamResponse as createStreamResponse,
 } from "./http.js";
+import { outputTokenLimitForUser } from "./rate-limit.js";
+import { MODEL_CATALOG_FALLBACKS, MODEL_MENU_PROVIDERS } from "../../shared/model-catalog.js";
 
 const GATEWAY_PROVIDERS = {
-  gemini: { label: "Google Gemini · Gateway", keyName: "GEMINI_API_KEY" },
   groq: { label: "Groq · Gateway", keyName: "GROQ_API_KEY" },
   openrouter: { label: "OpenRouter · Gateway", keyName: "OPENROUTER_API_KEY" },
   nvidia: { label: "NVIDIA NIM", keyName: "NVIDIA_API_KEY or NVIDIA_NIM_API_KEY" },
+  claude: { label: "Claude · Gateway", keyName: "CLAUDE_API_KEY or ANTHROPIC_API_KEY" },
+  kimi: { label: "Kimi / Moonshot · Gateway", keyName: "KIMI_API_KEY or MOONSHOT_API_KEY" },
 };
 const GATEWAY_LABELS = {
-  gemini: "Gemini",
   groq: "Groq",
   openrouter: "OpenRouter",
   nvidia: "NVIDIA",
+  claude: "Claude",
+  kimi: "Kimi",
 };
-const GATEWAY_FALLBACK_PRIORITY = ["nvidia", "groq", "gemini", "openrouter"];
+const GATEWAY_FALLBACK_PRIORITY = ["nvidia", "groq", "claude", "kimi", "openrouter"];
 const MAX_AUTOMATIC_FALLBACK_MODELS = 5;
 const GATEWAY_CATALOG_TTL_MS = 5 * 60 * 1000;
 const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
@@ -30,11 +34,18 @@ const UPSTREAM_IDLE_TIMEOUT_MS = HTTP_TIMEOUTS.upstreamIdleMs;
 const SSE_HEARTBEAT_INTERVAL_MS = HTTP_TIMEOUTS.sseHeartbeatMs;
 const catalogCache = new Map();
 const modelHealth = new Map();
+const DEFAULT_PROVIDER_OUTPUT_TOKENS = Object.freeze({
+  groq: 4096,
+  openrouter: 8192,
+  nvidia: 8192,
+  claude: 4096,
+  kimi: 8192,
+});
 const PROMPT_OPTIMIZER_INSTRUCTIONS = [
-  "You are a strict prompt rewriting engine. Your only task is to rewrite the user's latest draft as a clearer, more specific, effective prompt.",
+  "You are a strict prompt rewriting engine. Rewrite the user's draft as a concise, effective prompt with only the detail needed for a useful result.",
   "Never answer the draft, greet the user, ask questions, explain your edits, add technical commentary, or include an introduction or quotation marks around the result.",
-  "Return only the rewritten prompt. Preserve the user's intent and language. Structure it naturally with the task, relevant context or constraints, and the expected output format when useful.",
-  "For a short or rough request, expand it into a clear, actionable prompt without inventing facts. For a greeting or casual message, rewrite it as a natural, structured request for an AI assistant to help; do not respond to the greeting.",
+  "Return only the rewritten prompt in the user's language. Preserve the requested task, intent, and stated facts. Add a goal, relevant context, constraints, or output format only when they materially help. Do not invent missing facts; use a brief placeholder only when essential.",
+  "Remove ambiguity and redundant wording while minimizing token use; do not pad simple requests with generic steps or irrelevant structure. For greetings, write a brief natural offer of help without assuming a topic.",
 ].join(" ");
 export function clearGatewayCatalogCache(provider) {
   if (provider) {
@@ -58,10 +69,17 @@ const OPENAI_COMPATIBLE_PROVIDER_URLS = {
   groq: "https://api.groq.com/openai/v1",
   openrouter: "https://openrouter.ai/api/v1",
   nvidia: "https://integrate.api.nvidia.com/v1",
+  kimi: "https://api.moonshot.cn/v1",
 };
 
 function providerCatalogHeaders(provider, key) {
-  if (provider === "gemini") return { "x-goog-api-key": key };
+  if (provider === "claude") {
+    return {
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    };
+  }
   const headers = { Authorization: `Bearer ${key}` };
   if (provider === "openrouter") {
     headers["HTTP-Referer"] = "https://myai-v3-firmansyah.pages.dev";
@@ -70,12 +88,47 @@ function providerCatalogHeaders(provider, key) {
   return headers;
 }
 
+function buildAnthropicBody(input) {
+  const defaultMaxTokens = /(?:claude-(?:3[.-](?:5|7)|4)|(?:opus|sonnet)-4)/i.test(input.model) ? 8192 : 4096;
+  const providerMaxTokens = Number.isSafeInteger(input.modelMaxOutputTokens)
+    && input.modelMaxOutputTokens > 0
+    ? input.modelMaxOutputTokens
+    : defaultMaxTokens;
+  return {
+    model: input.model,
+    max_tokens: Math.max(1, Math.min(input.maxOutputTokens ?? defaultMaxTokens, providerMaxTokens)),
+    temperature: input.temperature,
+    messages: input.messages.filter((message) => message.role !== "system").map((message) => ({
+      role: message.role,
+      content: message.images?.length
+        ? [
+            { type: "text", text: message.content || "" },
+            ...message.images.map((image) => ({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: image.match(/^data:(image\/(png|jpeg|webp));base64,/)?.[1] || "image/png",
+                data: image.replace(/^data:image\/[a-z]+;base64,/, ""),
+              },
+            })),
+          ]
+        : message.content,
+    })),
+    system: input.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n") || undefined,
+    stream: true,
+  };
+}
+
 function providerChatConfig(input) {
-  if (input.provider === "gemini") {
+  if (input.provider === "claude") {
     return {
-      url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`,
-      headers: { "Content-Type": "application/json", "x-goog-api-key": input.key },
-      body: buildGeminiBody(input),
+      url: "https://api.anthropic.com/v1/messages",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": input.key,
+        "anthropic-version": "2023-06-01",
+      },
+      body: buildAnthropicBody(input),
     };
   }
   const baseUrl = OPENAI_COMPATIBLE_PROVIDER_URLS[input.provider];
@@ -92,6 +145,7 @@ function providerChatConfig(input) {
   };
 }
 
+
 export const PROVIDER_ADAPTERS = Object.freeze(Object.fromEntries(
   Object.entries(GATEWAY_PROVIDERS).map(([id, provider]) => [id, Object.freeze({
     id,
@@ -99,8 +153,8 @@ export const PROVIDER_ADAPTERS = Object.freeze(Object.fromEntries(
     icon: id,
     needsKey: true,
     async listModels(key, signal) {
-      const endpoint = id === "gemini"
-        ? "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+      const endpoint = id === "claude"
+        ? "https://api.anthropic.com/v1/models?limit=1000"
         : `${OPENAI_COMPATIBLE_PROVIDER_URLS[id]}/models`;
       return fetch(endpoint, { headers: providerCatalogHeaders(id, key), signal });
     },
@@ -119,7 +173,10 @@ function modelHealthKey(provider, modelId) {
 }
 
 function updateModelHealth(provider, modelId, status) {
-  const duration = status === 404 ? 60 * 60 * 1000 : 60 * 1000;
+  if (status === 403) return;
+  const duration = status === 404 ? 60 * 60 * 1000
+    : status === 402 ? 30 * 60 * 1000
+      : 60 * 1000;
   modelHealth.set(modelHealthKey(provider, modelId), { status, expiresAt: Date.now() + duration });
 }
 
@@ -154,23 +211,32 @@ function getGatewayKey(keys, provider) {
   return typeof key === "string" ? key.trim() : "";
 }
 
+function outputLimitForModel(provider, model) {
+  if (Number.isSafeInteger(model?.maxOutputTokens) && model.maxOutputTokens > 0) {
+    return model.maxOutputTokens;
+  }
+  if (provider === "openrouter") return null;
+  if (provider === "claude" && /(?:claude-(?:3[.-](?:5|7)|4)|(?:opus|sonnet)-4)/i.test(model?.id || "")) {
+    return 8192;
+  }
+  return DEFAULT_PROVIDER_OUTPUT_TOKENS[provider] || 8192;
+}
+
 export function modelAccessTier(provider, model) {
   const identity = `${model.id} ${model.name}`.toLowerCase();
   const size = Math.max(0, ...[...identity.matchAll(/(?:^|[-_./ ])(\d+(?:\.\d+)?)([bt])(?=$|[-_./ ])/g)]
     .map((match) => Number(match[1]) * (match[2] === "t" ? 1000 : 1)));
   const flagship = /\b(opus|sonnet|gemini[- ]?(?:\d+(?:\.\d+)?[- ])?(?:pro|ultra)|gpt[- ]?(?:4(?:\.1|o)?|o[134])|deepseek[- ]?r1|deep-research|nemotron[- ]?ultra|405b|671b|235b)\b/.test(identity)
     || size >= 100;
-  const advanced = /\b(reasoning|reasoner|thinking|qwq|r1|turbo|nemotron|mixtral|llama[- ]?4|70b|72b|80b)\b/.test(identity)
+  const advanced = /\b(reasoning|reasoner|thinking|r1|turbo|nemotron|mixtral|llama[- ]?4|70b|72b|80b)\b/.test(identity)
     || size >= 30;
 
   if (provider === "openrouter" && model.priceTier === "free") return "free";
   if (provider === "nvidia" && /^nvidia\/cosmos-reason2-8b$/i.test(String(model.id || ""))) return "free";
   if (flagship) return "max";
+  if (provider === "claude") return /\b(sonnet|opus|claude-3[.-][57]|claude-4|pro)\b/.test(identity) ? "max" : "pro";
+  if (provider === "kimi") return /\b(kimi[- ]?k2|reasoning|thinking|deepseek|r1)\b/.test(identity) || size >= 30 ? "pro" : /\b(8b|32b)\b/.test(identity) ? "basic" : "free";
   if (provider === "nvidia") return advanced ? "pro" : "basic";
-  if (provider === "gemini") {
-    if (advanced) return "pro";
-    return /\b(flash|lite|gemma)\b/.test(identity) ? "free" : "basic";
-  }
   if (provider === "groq") return advanced ? "pro" : size >= 10 ? "basic" : size > 0 ? "free" : "basic";
   if (provider === "openrouter") return advanced ? "pro" : "basic";
   return "basic";
@@ -198,19 +264,14 @@ async function fetchGatewayCatalog(provider, key, { forceRefresh = false } = {})
   }
   const sourceModels = Array.isArray(payload.models) ? payload.models : Array.isArray(payload.data) ? payload.data : [];
   const models = sourceModels.flatMap((item) => {
-    const rawId = typeof item.name === "string" && provider === "gemini" ? item.name.replace(/^models\//, "") : item.id;
+    const rawId = item.id;
     if (typeof rawId !== "string" || !rawId || rawId.length > 300) return [];
-    if (provider === "gemini" && (!item.supportedGenerationMethods?.includes("generateContent")
-      || /audio|tts|transcri|embedding|image|lyria|robotics|computer[-_ ]?use|live|antigravity/i.test(`${rawId} ${item.display_name || item.displayName || ""}`))) return [];
-    if (/\b(?:image|flux|stable[\s_-]?diffusion|dall[\s_-]?e|text[-_ ]?to[-_ ]?image)\b/i.test(`${rawId} ${item.display_name || item.displayName || ""}`)) return [];
+    if (provider !== "openrouter"
+      && /\b(?:image|flux|stable[\s_-]?diffusion|dall[\s_-]?e|text[-_ ]?to[-_ ]?image)\b/i.test(`${rawId} ${item.display_name || item.displayName || ""}`)) return [];
     if (provider === "groq" && /whisper|transcri|speech|audio|embed|moderation|guard|orpheus/i.test(rawId)) return [];
     if (provider === "nvidia") {
       if (/embed|retriev|rerank|ranker|nemoguard|safety[-_ ]guard|content[-_ ]safety|topic[-_ ]control|reward|classifier|moderation/i.test(`${rawId} ${item.display_name || item.displayName || ""}`)) return [];
       if (!/^(?:nvidia\/|google\/|meta(?:-llama)?\/|microsoft\/)/i.test(rawId)) return [];
-    }
-    if (provider === "openrouter") {
-      const outputModalities = item.architecture?.output_modalities || ["text"];
-      if (!outputModalities.includes("text") || outputModalities.includes("image")) return [];
     }
     const name = String(item.display_name || item.displayName || item.name || item.id || rawId).replace(/^models\//, "");
     const pricing = item.pricing || {};
@@ -219,16 +280,37 @@ async function fetchGatewayCatalog(provider, key, { forceRefresh = false } = {})
       && [pricing.prompt, pricing.completion].every((price) => Number.isFinite(Number(price)) && Number(price) === 0)
       && (pricing.request === undefined || pricing.request === null || pricing.request === ""
         || (Number.isFinite(Number(pricing.request)) && Number(pricing.request) === 0));
-    const inputModalities = item.architecture?.input_modalities || [];
+    const inputModalities = Array.isArray(item.architecture?.input_modalities)
+      ? item.architecture.input_modalities.map((modality) => String(modality).slice(0, 32)).slice(0, 8)
+      : ["text"];
+    const outputModalities = Array.isArray(item.architecture?.output_modalities)
+      ? item.architecture.output_modalities.map((modality) => String(modality).slice(0, 32)).slice(0, 8)
+      : ["text"];
+    const chatSupport = provider !== "openrouter"
+      || inputModalities.includes("text") && outputModalities.includes("text");
+    const modelMaxOutputTokens = Number(item.top_provider?.max_completion_tokens
+      ?? item.max_output_tokens
+      ?? item.outputTokenLimit
+      ?? item.max_tokens);
     return [{
       id: rawId,
       name: name.slice(0, 160),
       priceTier: isFree ? "free" : "check",
       ...(Number.isSafeInteger(contextWindow) && contextWindow > 0 && contextWindow <= 10_000_000 ? { contextWindow } : {}),
+      ...(Number.isSafeInteger(modelMaxOutputTokens) && modelMaxOutputTokens > 0 && modelMaxOutputTokens <= 1_000_000
+        ? { maxOutputTokens: modelMaxOutputTokens }
+        : {}),
+      ...(provider === "openrouter" ? {
+        inputModalities,
+        outputModalities,
+        chatSupport,
+        ...(!outputModalities.includes("text") && outputModalities.includes("image") ? { imageOnly: true } : {}),
+      } : {}),
       ...(["openrouter", "nvidia"].includes(provider) && inputModalities.includes("image") ? { imageSupport: true } : {}),
+      ...(provider === "claude" && /claude-(?:3|4)/i.test(rawId) ? { imageSupport: true } : {}),
+      ...(provider === "kimi" && /(?:vision|\bvl\b)/i.test(rawId) ? { imageSupport: true } : {}),
       ...(provider === "groq" && /llama-3\.2-11b-vision|llama-4-(?:scout|maverick)/i.test(rawId) ? { imageSupport: true } : {}),
       ...(provider === "nvidia" && /(?:llama-3\.2.*vision|llama-4-(?:scout|maverick))/i.test(rawId) ? { imageSupport: true } : {}),
-      ...(provider === "gemini" && !/audio|tts|transcri|embedding|image/i.test(rawId) ? { imageSupport: true } : {}),
     }];
   });
   const unique = [...new Map(models.map((model) => [model.id, model])).values()]
@@ -245,14 +327,37 @@ export async function gatewayModelGroups(keys, requestedProviders = Object.keys(
   const results = await Promise.allSettled(requestedProviders
     .filter((provider) => Object.hasOwn(GATEWAY_PROVIDERS, provider))
     .filter((provider) => keys?.[provider])
-    .map(async (provider) => ({
-      provider: `gateway-${provider}`,
-      label: GATEWAY_PROVIDERS[provider].label,
-      tag: provider === "openrouter"
-        ? "Model dari akun OpenRouter · biaya provider berlaku"
-        : `${GATEWAY_LABELS[provider]} · biaya dan kuota provider berlaku`,
-      models: (await fetchGatewayCatalog(provider, keys[provider]))
+    .map(async (provider) => {
+      let models;
+      let catalogError = "";
+      try {
+        models = await fetchGatewayCatalog(provider, keys[provider]);
+      } catch (error) {
+        const fallbackModels = MODEL_CATALOG_FALLBACKS[provider];
+        const status = Number(error?.status || 0);
+        if (!MODEL_MENU_PROVIDERS.includes(provider)
+          || !fallbackModels
+          || status < 500
+          || status > 599) {
+          throw error;
+        }
+        catalogError = error?.message || `${GATEWAY_LABELS[provider]}: memakai katalog cadangan.`;
+        models = fallbackModels.map((model) => ({
+          ...model,
+          catalogFallback: true,
+          priceTier: model.priceTier || "check",
+          accessTier: modelAccessTier(provider, model),
+        }));
+      }
+      return {
+        provider: `gateway-${provider}`,
+        label: GATEWAY_PROVIDERS[provider].label,
+        tag: provider === "openrouter"
+          ? "Model dari akun OpenRouter · biaya provider berlaku"
+          : `${GATEWAY_LABELS[provider]} · biaya dan kuota provider berlaku`,
+        models: models
         .flatMap((model) => {
+          if (model.catalogFallback) return [model];
           const health = currentModelHealth(provider, model.id);
           if (health?.status === 404) return [];
           const availabilityStatus = health?.status === 402
@@ -269,12 +374,15 @@ export async function gatewayModelGroups(keys, requestedProviders = Object.keys(
             ...(availabilityStatus ? { availabilityStatus } : {}),
           }];
         }),
-    })));
+        catalogError,
+      };
+    }));
   const groups = [];
   const errors = [];
   for (const result of results) {
     if (result.status === "fulfilled") {
       if (result.value.models.length) groups.push(result.value);
+      if (result.value.catalogError) errors.push(result.value.catalogError);
     } else {
       errors.push(result.reason?.message || "Katalog gateway gagal dimuat.");
     }
@@ -348,15 +456,15 @@ function healthStatusMessage(status) {
   })[status] || "Provider merespons dengan benar.";
 }
 
-function healthUsage(provider, payload) {
-  const usage = provider === "gemini" ? payload?.usageMetadata : payload?.usage;
+function healthUsage(payload) {
+  const usage = payload?.usage;
   const safeCount = (value) => {
     const count = Number(value);
     return Number.isSafeInteger(count) && count >= 0 ? count : 0;
   };
-  const promptTokens = safeCount(usage?.promptTokenCount ?? usage?.input_tokens ?? usage?.prompt_tokens);
-  const completionTokens = safeCount(usage?.candidatesTokenCount ?? usage?.output_tokens ?? usage?.completion_tokens);
-  const totalTokens = safeCount(usage?.totalTokenCount ?? usage?.total_tokens) || promptTokens + completionTokens;
+  const promptTokens = safeCount(usage?.input_tokens ?? usage?.prompt_tokens);
+  const completionTokens = safeCount(usage?.output_tokens ?? usage?.completion_tokens);
+  const totalTokens = safeCount(usage?.total_tokens) || promptTokens + completionTokens;
   return {
     promptTokens,
     completionTokens,
@@ -364,11 +472,7 @@ function healthUsage(provider, payload) {
   };
 }
 
-function hasHealthReply(provider, payload) {
-  if (provider === "gemini") {
-    return payload?.candidates?.some((candidate) =>
-      candidate?.content?.parts?.some((part) => typeof part.text === "string" && part.text.trim()));
-  }
+function hasHealthReply(payload) {
   const content = payload?.choices?.[0]?.message?.content;
   return typeof content === "string"
     ? Boolean(content.trim())
@@ -379,7 +483,6 @@ export function healthProbeModels(provider, models, limit = provider === "nvidia
   return [...models].sort((left, right) => {
     const priority = (model) => {
       const id = model.id.toLowerCase();
-      if (provider === "gemini" && id === "gemini-3-flash-preview") return 0;
       if (provider === "nvidia") {
         if (/nvidia\/nemotron.*bolt.*e4b/.test(id)) return 0;
         if (/nvidia\/nemotron.*(lightning|nano|mini|7b|8b|12b|15b|20b|30b|40b)/.test(id)) return 1;
@@ -387,7 +490,7 @@ export function healthProbeModels(provider, models, limit = provider === "nvidia
       }
       if (provider === "openrouter") {
         if (id === "cohere/north-mini-code:free") return 0;
-        if (/^(?:google\/|meta-llama\/|qwen\/)/.test(id) && model.priceTier === "free") return 0;
+        if (/^(?:google\/|meta-llama\/)/.test(id) && model.priceTier === "free") return 0;
         if (model.priceTier === "free") return 1;
       }
       return 2;
@@ -433,14 +536,9 @@ export async function probeGatewayProvider(provider, key) {
       });
       let url = config.url;
       let body = { ...config.body };
-      if (provider === "gemini") {
-        url = url.replace(":streamGenerateContent?alt=sse", ":generateContent");
-        body = { ...body, generationConfig: { ...body.generationConfig, maxOutputTokens: 64 } };
-      } else {
-        body.stream = false;
-        body.max_tokens = 64;
-        delete body.stream_options;
-      }
+      body.stream = false;
+      body.max_tokens = 64;
+      delete body.stream_options;
       const response = await fetch(url, {
         method: "POST",
         headers: config.headers,
@@ -467,7 +565,7 @@ export async function probeGatewayProvider(provider, key) {
       } catch {
         throw new GatewayError(502, "Provider mengembalikan JSON yang tidak valid.");
       }
-      if (!hasHealthReply(provider, payload)) {
+      if (!hasHealthReply(payload)) {
         if (provider === "openrouter") {
           lastModelResponse = {
             status: "GANGGUAN",
@@ -484,7 +582,7 @@ export async function probeGatewayProvider(provider, key) {
         status: "OK",
         latencyMs: Date.now() - startedAt,
         model,
-        usage: healthUsage(provider, payload),
+        usage: healthUsage(payload),
         message: healthStatusMessage("OK"),
       };
     }
@@ -547,7 +645,7 @@ function validateMessages(value) {
   ];
 }
 
-export function validateGatewayBody(body, keys) {
+export function validateGatewayBody(body, keys, { maxOutputTokens = 8192 } = {}) {
   const provider = typeof body.provider === "string" ? body.provider : "";
   if (!Object.hasOwn(GATEWAY_PROVIDERS, provider)) {
     throw new GatewayError(400, "Provider gateway harus merupakan provider AI yang didukung.");
@@ -569,8 +667,8 @@ export function validateGatewayBody(body, keys) {
   const byteLength = new TextEncoder().encode(JSON.stringify(messages)).byteLength;
   if (byteLength > MAX_REQUEST_BYTES) throw new GatewayError(413, "Permintaan gateway melebihi batas 4 MiB.");
   const webSearch = body.webSearch === true;
-  if (webSearch && !["gemini", "openrouter"].includes(provider)) {
-    throw new GatewayError(400, `Pencarian web belum didukung oleh ${GATEWAY_LABELS[provider]}. Pilih Gemini atau OpenRouter.`);
+  if (webSearch && provider !== "openrouter") {
+    throw new GatewayError(400, `Pencarian web belum didukung oleh ${GATEWAY_LABELS[provider]}. Pilih OpenRouter.`);
   }
   const temperature = Number(body.temperature);
   return {
@@ -578,6 +676,11 @@ export function validateGatewayBody(body, keys) {
     key,
     model,
     messages,
+    maxOutputTokens: provider === "openrouter"
+      ? null
+      : Number.isSafeInteger(maxOutputTokens)
+      ? Math.max(1, maxOutputTokens)
+      : Number.MAX_SAFE_INTEGER,
     temperature: promptHelper ? 0.2 : Number.isFinite(temperature) ? Math.max(0, Math.min(2, temperature)) : 0.7,
     webSearch,
     researchMode: body.researchMode === true,
@@ -593,23 +696,6 @@ function imageParts(images) {
   });
 }
 
-function buildGeminiBody(input) {
-  const system = input.messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
-  const contents = input.messages.filter((message) => message.role !== "system").map((message) => ({
-    role: message.role === "assistant" ? "model" : "user",
-    parts: [
-      { text: message.content },
-      ...imageParts(message.images || []).map((image) => ({ inlineData: { mimeType: image.mimeType, data: image.data } })),
-    ],
-  }));
-  return {
-    contents,
-    generationConfig: { temperature: input.temperature, maxOutputTokens: 4096 },
-    ...(input.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
-    ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-  };
-}
-
 function buildOpenAIBody(input) {
   const messages = input.messages.map((message) => {
     if (!message.images?.length) return { role: message.role, content: message.content };
@@ -621,6 +707,16 @@ function buildOpenAIBody(input) {
       ],
     };
   });
+  const defaultMaxTokens = input.provider === "groq" ? 4096 : 8192;
+  const modelMaxTokens = Number.isSafeInteger(input.modelMaxOutputTokens) && input.modelMaxOutputTokens > 0
+    ? input.modelMaxOutputTokens
+    : null;
+  const requestedMaxTokens = Number.isSafeInteger(input.maxOutputTokens) && input.maxOutputTokens > 0
+    ? input.maxOutputTokens
+    : defaultMaxTokens;
+  const maxTokens = input.provider === "openrouter"
+    ? modelMaxTokens
+    : Math.max(1, Math.min(requestedMaxTokens, modelMaxTokens ?? defaultMaxTokens));
   return {
     model: input.model,
     messages,
@@ -629,7 +725,7 @@ function buildOpenAIBody(input) {
       ? { stream_options: { include_usage: true } }
       : {}),
     temperature: input.provider === "nvidia" ? Math.min(1, input.temperature) : input.temperature,
-    max_tokens: 4096,
+    ...(Number.isSafeInteger(maxTokens) ? { max_tokens: maxTokens } : {}),
     ...(input.webSearch && input.provider === "openrouter"
       ? { plugins: [{ id: "web", max_results: input.researchMode ? 10 : 5 }] }
       : {}),
@@ -688,6 +784,10 @@ function chatChunk(content, extra = {}) {
   return `data: ${JSON.stringify({ choices: [{ index: 0, delta: { ...extra, ...(content ? { content } : {}) }, finish_reason: null }] })}\n\n`;
 }
 
+function truncatedChunk() {
+  return `data: ${JSON.stringify({ type: "truncated", truncated: true })}\n\n`;
+}
+
 function errorChunk(message) {
   return `data: ${JSON.stringify({ error: message })}\n\n`;
 }
@@ -709,9 +809,12 @@ function providerErrorMessage(provider, status, raw, key) {
   } catch {}
   if (typeof detail !== "string") detail = detail ? JSON.stringify(detail) : "";
   if (key) detail = detail.split(key).join("[redacted]");
+  if (status === 403 && provider.toLowerCase().includes("hugging face")) {
+    return `${provider}: akses inference atau model ditolak (HTTP 403). Periksa izin token dan akses model.`;
+  }
   if (status === 401 || status === 403) return `${provider}: API key ditolak. Periksa secret provider di Cloudflare Worker.`;
   if (status === 429) return `${provider}: kuota atau rate limit provider tercapai. Periksa billing dan batas penggunaan.`;
-  if (status === 402) return `${provider}: kuota atau saldo provider tidak mencukupi (HTTP 402).`;
+  if (status === 402) return `${provider}: HTTP 402 · ${detail || "kuota atau saldo provider tidak mencukupi."}`.slice(0, 1200);
   if (status === 404) return `${provider}: model tidak ditemukan atau tidak tersedia untuk akun ini (HTTP 404).`;
   if (status >= 500) return `${provider}: layanan provider sedang bermasalah. Coba lagi nanti.`;
   return `${provider}: ${detail || `provider menolak permintaan (HTTP ${status})`}`.slice(0, 1200);
@@ -722,9 +825,8 @@ function providerEventHasText(provider, eventName, data) {
   if (data.type === "error" || providerError) {
     throw new GatewayError(502, String(providerError || data.message || `${provider}: provider mengembalikan error.`).slice(0, 1200));
   }
-  if (provider === "gemini") {
-    return (data.candidates?.[0]?.content?.parts || [])
-      .some((part) => typeof part.text === "string" && Boolean(part.text.trim()));
+  if (provider === "claude") {
+    return data.type === "content_block_delta" && typeof data.delta?.text === "string" && Boolean(data.delta.text.trim());
   }
   const choices = data.choices || [];
   return choices.some((choice) => {
@@ -837,13 +939,15 @@ async function primeProviderStream(response, provider) {
 async function* normalizeStream(response, provider) {
   const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
   let hasUsage = false;
+  let truncated = false;
   for await (const event of readProviderEvents(response)) {
     const data = parseProviderData(event);
     if (!data) continue;
-    if (provider === "gemini" && data.usageMetadata) {
-      usage.prompt_tokens = Number(data.usageMetadata.promptTokenCount ?? usage.prompt_tokens);
-      usage.completion_tokens = Number(data.usageMetadata.candidatesTokenCount ?? usage.completion_tokens);
-      usage.total_tokens = Number(data.usageMetadata.totalTokenCount ?? (usage.prompt_tokens + usage.completion_tokens));
+    if (provider === "claude" && (data.usage || data.message?.usage)) {
+      const claudeUsage = data.usage || data.message.usage;
+      usage.prompt_tokens = Number(claudeUsage.input_tokens ?? usage.prompt_tokens);
+      usage.completion_tokens = Number(claudeUsage.output_tokens ?? usage.completion_tokens);
+      usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
       hasUsage = true;
     } else if (data.usage) {
       usage.prompt_tokens = Number(data.usage.prompt_tokens ?? usage.prompt_tokens);
@@ -852,31 +956,28 @@ async function* normalizeStream(response, provider) {
       hasUsage = true;
     }
     const providerError = typeof data.error === "string" ? data.error : data.error?.message;
-    if (provider === "gemini") {
-      if (providerError) { yield errorChunk(providerError); break; }
-      const parts = data.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) {
-        if (!part.text) continue;
-        yield part.thought ? chatChunk("", { reasoning: part.text }) : chatChunk(part.text);
+    if (provider === "claude") {
+      if (data.type === "error" || providerError) {
+        yield errorChunk(providerError || data.message || `${GATEWAY_LABELS[provider]} mengembalikan error saat streaming.`);
+        break;
       }
-      const citations = (data.candidates?.[0]?.groundingMetadata?.groundingChunks || [])
-        .filter((source) => source.web?.uri)
-        .map((source) => ({
-          type: "url_citation",
-          url_citation: { url: source.web.uri, title: source.web.title },
-        }));
-      if (citations.length) yield chatChunk("", { annotations: citations });
+      if (data.type === "content_block_delta" && typeof data.delta?.text === "string") {
+        yield chatChunk(data.delta.text);
+      }
+      if (data.type === "message_delta" && data.delta?.stop_reason === "max_tokens") truncated = true;
       continue;
     }
     if (data.type === "error" || providerError) {
       yield errorChunk(providerError || data.message || `${GATEWAY_LABELS[provider]} mengembalikan error saat streaming.`);
       break;
     }
+    if (data.choices?.some((choice) => choice.finish_reason === "length")) truncated = true;
     const delta = data.choices?.[0]?.delta;
     const annotations = delta?.annotations || data.choices?.[0]?.message?.annotations || [];
     if (provider === "openrouter" && annotations.length) yield chatChunk("", { annotations });
     if (typeof delta?.content === "string") yield chatChunk(delta.content);
   }
+  if (truncated) yield truncatedChunk();
   if (hasUsage) yield usageChunk(usage);
   yield "data: [DONE]\n\n";
 }
@@ -1038,7 +1139,9 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
     let body;
     try { body = raw.trim() ? JSON.parse(raw) : {}; } catch { throw new GatewayError(400, "Isi permintaan gateway harus berupa JSON yang valid."); }
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new GatewayError(400, "Payload gateway harus berupa objek JSON.");
-    const requestedInput = validateGatewayBody(body, keys);
+    const requestedInput = validateGatewayBody(body, keys, {
+      maxOutputTokens: body.provider === "openrouter" ? null : outputTokenLimitForUser(user, env),
+    });
     let input = requestedInput;
     const allowFallback = body.allowFallback === true;
     if (!Object.values(keys || {}).some((key) => typeof key === "string" && key.trim())) {
@@ -1053,11 +1156,16 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
     const { groups, errors } = requestedCatalog;
     const group = groups.find((item) => item.provider === `gateway-${input.provider}`);
     const selectedModel = group?.models.find((candidate) => candidate.id === input.model);
+    input = {
+      ...requestedInput,
+      maxOutputTokens: input.provider === "openrouter"
+        ? outputLimitForModel(input.provider, selectedModel)
+        : Math.min(requestedInput.maxOutputTokens, outputLimitForModel(input.provider, selectedModel)),
+      modelMaxOutputTokens: selectedModel?.maxOutputTokens,
+    };
     const providerHealth = [];
-    if (selectedModel) {
-      const premiumSelected = input.provider === "openrouter"
-        ? selectedModel.priceTier !== "free"
-        : selectedModel.accessTier !== "free";
+    if (selectedModel && input.provider !== "openrouter") {
+      const premiumSelected = selectedModel.accessTier !== "free";
       const permittedUids = String(env?.PREMIUM_ALLOWED_UIDS || "")
         .split(",")
         .map((uid) => uid.trim())
@@ -1071,7 +1179,7 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
     }
     const upstreamRequest = makeUpstreamRequest(request, UPSTREAM_CONNECT_TIMEOUT_MS);
     const fallbackProviders = input.webSearch
-      ? GATEWAY_FALLBACK_PRIORITY.filter((provider) => ["gemini", "openrouter"].includes(provider))
+      ? GATEWAY_FALLBACK_PRIORITY.filter((provider) => provider === "openrouter")
       : GATEWAY_FALLBACK_PRIORITY;
     const fallbackModels = async () => {
       const providers = fallbackProviders.filter((provider) => provider !== input.provider && keys?.[provider]);
@@ -1081,9 +1189,9 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
         models: fallbackGroup.models
         .filter((model) => model.accessTier === "free"
           && (fallbackGroup.provider !== "gateway-openrouter" || model.priceTier === "free")
-          && model.availabilityStatus !== "limited-rate"
+          && !["limited-rate", "credit-required", "permission-required"].includes(model.availabilityStatus)
           && (!hasImages || model.imageSupport)
-          && (!input.webSearch || ["gateway-gemini", "gateway-openrouter"].includes(fallbackGroup.provider)))
+          && (!input.webSearch || fallbackGroup.provider === "gateway-openrouter"))
         .map((model) => ({ ...model, provider: fallbackGroup.provider.slice("gateway-".length) }))
         .sort((left, right) => {
           const fast = /(?:flash|instant|mini|lite|small|8b)/i;
@@ -1110,14 +1218,27 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
     let activeInput = input;
     let fallback = null;
     let response;
-    let retryStatus = selectedModel ? 0 : errors.length ? 502 : 404;
-    let retryMessage = selectedModel
-      ? ""
+    const selectedModelHealth = selectedModel ? currentModelHealth(input.provider, input.model) : null;
+    const selectedModelCircuitOpen = [402, 429].includes(selectedModelHealth?.status);
+    let retryStatus = selectedModelCircuitOpen ? selectedModelHealth.status : selectedModel ? 0 : errors.length ? 502 : 404;
+    let retryMessage = selectedModelCircuitOpen
+      ? `${GATEWAY_LABELS[input.provider]} / model ${input.model} sedang dinonaktifkan sementara setelah HTTP ${selectedModelHealth.status}.`
+      : selectedModel
+        ? ""
       : errors.length
         ? errors[0]
         : `${input.provider}: model ${input.model} tidak lagi ada di katalog aktif.`;
-    let primaryError = errors.length ? { status: 502, message: errors[0] } : null;
-    if (!selectedModel) {
+    let primaryError = selectedModelCircuitOpen
+      ? { status: selectedModelHealth.status, message: retryMessage }
+      : errors.length ? { status: 502, message: errors[0] } : null;
+    if (selectedModelCircuitOpen) {
+      providerHealth.push({
+        provider: input.provider,
+        model: input.model,
+        status: "EXHAUSTED",
+        detail: retryMessage,
+      });
+    } else if (!selectedModel) {
       providerHealth.push({
         provider: input.provider,
         model: input.model,
@@ -1125,26 +1246,36 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
         detail: retryMessage,
       });
     }
-    let candidates = retryStatus && allowFallback ? await fallbackModels() : [];
-    if (retryStatus && !candidates.length) {
+    let candidates = retryStatus && (allowFallback || selectedModelCircuitOpen) ? await fallbackModels() : [];
+    if (retryStatus && !candidates.length && !selectedModelCircuitOpen) {
       if (!input.key) {
         throw new GatewayError(503, `${GATEWAY_LABELS[input.provider]} belum dikonfigurasi. Admin perlu memasang secret ${GATEWAY_PROVIDERS[input.provider].keyName}; tidak ada provider cadangan aktif.`);
       }
       throw new GatewayError(404, `Model ${input.model} tidak tersedia pada katalog aktif ${GATEWAY_LABELS[input.provider]}. Pilih model lain untuk melanjutkan.`);
     }
-    const attempts = selectedModel ? [{ input, model: selectedModel }] : [];
+    const attempts = selectedModel && !selectedModelCircuitOpen ? [{ input, model: selectedModel }] : [];
     const appendFallbackAttempts = () => attempts.push(...candidates.map((model) => ({
-      input: { ...input, provider: model.provider, model: model.id, key: keys[model.provider] },
+      input: {
+        ...input,
+        provider: model.provider,
+        model: model.id,
+        key: keys[model.provider],
+        maxOutputTokens: model.provider === "openrouter"
+          ? outputLimitForModel(model.provider, model)
+          : Math.min(requestedInput.maxOutputTokens, outputLimitForModel(model.provider, model)),
+        modelMaxOutputTokens: model.maxOutputTokens,
+      },
       model,
     })));
     if (retryStatus) appendFallbackAttempts();
-    let fallbackCandidatesAdded = retryStatus && allowFallback;
+    let fallbackCandidatesAdded = retryStatus && (allowFallback || selectedModelCircuitOpen);
     const quotaLimitedProviders = new Set();
+    const rejectedProviders = new Set();
     for (let index = 0; index < attempts.length; index++) {
       const attempt = attempts[index];
       const isPrimaryAttempt = Boolean(selectedModel && index === 0);
       const attemptInput = attempt.input;
-      if (quotaLimitedProviders.has(attemptInput.provider)) continue;
+      if (quotaLimitedProviders.has(attemptInput.provider) || rejectedProviders.has(attemptInput.provider)) continue;
       const upstream = upstreamConfig(attemptInput, request);
       let providerFailure = null;
       let providerSucceeded = false;
@@ -1215,12 +1346,14 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
           providerFailure = {
             status: failedStatus,
             retryable: failedStatus >= 500,
-            healthStatus: failedStatus === 402 || failedStatus === 429 ? "EXHAUSTED" : "ERROR",
+            healthStatus: failedStatus === 402 || failedStatus === 429
+              ? "EXHAUSTED"
+              : "ERROR",
             latencyMs: Date.now() - attemptStartedAt,
             message,
           };
           response = null;
-          if (![401, 402, 404, 429, 500, 502, 503, 504].includes(failedStatus)) {
+          if (![400, 401, 402, 404, 429, 500, 502, 503, 504].includes(failedStatus)) {
             upstreamRequest.cleanup();
             throw new GatewayError(failedStatus >= 500 ? 502 : failedStatus, message);
           }
@@ -1267,11 +1400,14 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
       if (providerFailure.status === 402 || providerFailure.status === 429) {
         quotaLimitedProviders.add(attemptInput.provider);
       }
+      if (providerFailure.status === 400) rejectedProviders.add(attemptInput.provider);
       retryMessage = providerFailure.message;
     }
     if (!response) {
       upstreamRequest.cleanup();
-      const message = primaryError?.message || retryMessage || "Semua provider AI yang tersedia sedang gagal.";
+      const message = primaryError?.message && retryMessage && primaryError.message !== retryMessage
+        ? `${primaryError.message} Fallback terakhir: ${retryMessage}`
+        : primaryError?.message || retryMessage || "Semua provider AI yang tersedia sedang gagal.";
       return new Response([
         ...providerHealth.map((health) => `data: ${JSON.stringify({ type: "provider-health", ...health })}\n\n`),
         errorChunk(message),

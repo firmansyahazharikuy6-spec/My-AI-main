@@ -1,3 +1,5 @@
+import { Capacitor } from "@capacitor/core";
+
 // Isi dengan konfigurasi dari Firebase Console > Project settings > Your apps > Web app.
 export const firebaseConfig = {
   apiKey: "AIzaSyBxenbvx__OOo5mbbROy8-1jEoLRqXaPSI",
@@ -12,6 +14,8 @@ export const firebaseConfig = {
 const configuredApiBase = import.meta.env?.VITE_MYAI_API_BASE;
 export const AI_API_URL = typeof configuredApiBase === "string" && configuredApiBase.trim()
   ? configuredApiBase.trim().replace(/\/+$/, "")
-  : "/api";
+  : Capacitor.isNativePlatform()
+    ? "https://myai-v3-firmansyah.pages.dev/api"
+    : "/api";
 export const APP_NAME = "MyAI";
 export const APP_VERSION = "5.47";

@@ -7,6 +7,7 @@
   <meta name="description" content="MyAI brings Gemini, Groq, OpenRouter, and other AI providers together in one workspace for learning, writing, and coding." />
   <meta name="robots" content="index,follow,max-image-preview:large" />
   <meta name="theme-color" content="#ffffff" />
+  <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="canonical" href="https://myai-v3-firmansyah.pages.dev/" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="MyAI" />
@@ -30,14 +31,16 @@
     }
   </script>
   <link rel="icon" type="image/png" href="assets/myai-orbital-logo.png" />
-  <link rel="stylesheet" href="css/style.css?v=20261024-v5.117" />
+  <link rel="apple-touch-icon" href="icons/myai-192.png" />
+  <link rel="stylesheet" href="css/style.css?v=20261030-v6.140" />
+  <link rel="stylesheet" href="css/apple-glass.css?v=20261030-v6.140" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
-  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-  <script type="module" src="js/app.js?v=20261024-v5.102"></script>
+  <script type="module" src="js/app.js?v=20261029-v5.130"></script>
 </head>
 <body>
   <section id="landing" class="landing">
@@ -50,6 +53,10 @@
         <button id="landingLogin" class="btn ghost" type="button" data-i18n-dynamic="openAccount">Sign in or create account</button>
       </div>
       <p class="landing-note" data-i18n="landingNote">Two free responses without an account · Cloud models require internet.</p>
+      <nav class="legal-links" aria-label="Legal">
+        <a href="https://myai-v3-firmansyah.pages.dev/privacy.html" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+        <a href="https://myai-v3-firmansyah.pages.dev/terms.html" target="_blank" rel="noopener noreferrer">Terms of service</a>
+      </nav>
     </div>
   </section>
   <dialog id="loginDialog" class="login-dialog">
@@ -75,6 +82,10 @@
       </button>
     </div>
     <p id="loginError" class="login-error hidden" role="alert"></p>
+    <nav class="legal-links" aria-label="Legal">
+      <a href="https://myai-v3-firmansyah.pages.dev/privacy.html" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+      <a href="https://myai-v3-firmansyah.pages.dev/terms.html" target="_blank" rel="noopener noreferrer">Terms of service</a>
+    </nav>
   </dialog>
   <div class="app">
     <aside id="sidebar" class="sidebar">
@@ -97,7 +108,7 @@
       </div>
       <input id="chatSearch" class="chat-search hidden" type="search" placeholder="Cari riwayat…" autocomplete="off" />
       <nav id="chatList" class="chat-list" aria-label="Chat history"></nav>
-      <template id="noHistoryTemplate"><p class="chat-list-empty" data-i18n="no_history_text">Belum ada riwayat chat.</p></template>
+      <template id="noHistoryTemplate"><p class="chat-list-empty" data-i18n="no_history_text">No recent chats.</p></template>
       <div class="sidebar-footer">
         <section class="sidebar-user-card" aria-label="Account and personalization">
           <button id="openPersonalization" class="sidebar-settings" type="button"><span class="sidebar-icon" aria-hidden="true">✦</span><span data-i18n="personalization">Personalization</span></button>
@@ -107,6 +118,10 @@
           </button>
           <div id="account" class="account"></div>
         </section>
+        <nav class="legal-links sidebar-legal-links" aria-label="Legal">
+          <a href="https://myai-v3-firmansyah.pages.dev/privacy.html" target="_blank" rel="noopener noreferrer">Privacy</a>
+          <a href="https://myai-v3-firmansyah.pages.dev/terms.html" target="_blank" rel="noopener noreferrer">Terms</a>
+        </nav>
       </div>
     </aside>
     <div id="backdrop" class="backdrop"></div>
@@ -122,10 +137,14 @@
             <span class="usage-health-indicator" aria-hidden="true"></span>
             <span id="usageDashboardTokenCount">0</span>
           </button>
-          <button id="shareChat" class="icon-btn hidden" type="button" aria-label="Salin percakapan" title="Salin percakapan sebagai teks">⧉</button>
-          <button id="exportChat" class="icon-btn hidden" type="button" aria-label="Unduh percakapan" title="Unduh percakapan (.md)">↓</button>
+          <button id="shareChat" class="icon-btn hidden" type="button" aria-label="Copy conversation" title="Copy conversation as text" data-i18n-aria-label="copyChat" data-i18n-title="copyChatAsText">⧉</button>
+          <button id="memoryBtn" class="icon-btn" type="button" aria-label="MyAI memory" title="MyAI memory — notes the AI remembers" data-i18n-aria-label="myaiMemory" data-i18n-title="myaiMemoryHint">🧠</button>
+          <button id="exportChat" class="icon-btn hidden" type="button" aria-label="Download conversation" title="Download conversation (.md)" data-i18n-aria-label="downloadChat" data-i18n-title="downloadChatHint">↓</button>
         </div>
       </header>
+      <div id="offlineNotice" class="offline-banner hidden" role="status" aria-live="polite" data-i18n="offlineNotice">
+        MyAI membutuhkan koneksi internet untuk login dan fitur AI.
+      </div>
       <div id="progress" class="progress hidden">
         <div class="progress-bar"><div id="progressFill"></div></div>
         <span id="progressText"></span>
@@ -133,18 +152,19 @@
 
       <div class="chat-wrap empty" id="chatWrap">
         <section id="messages" class="messages" aria-live="polite"></section>
-        <button id="scrollDown" class="scroll-down hidden" type="button" aria-label="Gulir ke pesan terbaru" title="Ke pesan terbaru">↓</button>
+        <button id="scrollDown" class="scroll-down hidden" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" data-i18n-aria-label="scrollToLatest" data-i18n-title="scrollToLatest">↓</button>
 
         <section id="taskProgressTracker" class="task-progress-tracker hidden" aria-label="Task progress" aria-live="polite" aria-atomic="false">
           <div class="task-progress-heading">
             <span class="task-progress-orbit" aria-hidden="true"></span>
-            <span id="taskProgressLabel" data-i18n="taskProgressAnalysis">Menganalisis permintaan</span>
-            <span id="taskProgressState" class="task-progress-state" data-i18n="taskProgressRunning">Berjalan</span>
+            <span id="taskProgressLabel" data-i18n="taskProgressAnalysis">Analyzing request</span>
+            <span id="taskProgressState" class="task-progress-state" data-i18n="taskProgressRunning">Running</span>
           </div>
           <ol class="task-progress-steps">
-            <li class="active" data-step="analysis" aria-current="step"><span class="task-step-mark" aria-hidden="true">1</span><span data-i18n="taskStepAnalysis">Analisis</span></li>
-            <li data-step="execution"><span class="task-step-mark" aria-hidden="true">2</span><span data-i18n="taskStepExecution">Eksekusi</span></li>
-            <li data-step="complete"><span class="task-step-mark" aria-hidden="true">3</span><span data-i18n="taskStepComplete">Selesai</span></li>
+            <li class="active" data-step="analysis" aria-current="step"><span class="task-step-mark" aria-hidden="true">1</span><span data-i18n="taskStepAnalysis">Analysis</span></li>
+            <li data-step="planning"><span class="task-step-mark" aria-hidden="true">2</span><span data-i18n="taskStepPlanning">Planning</span></li>
+            <li data-step="execution"><span class="task-step-mark" aria-hidden="true">3</span><span data-i18n="taskStepExecution">Execution</span></li>
+            <li data-step="verification"><span class="task-step-mark" aria-hidden="true">4</span><span data-i18n="taskStepVerification">Verification</span></li>
           </ol>
         </section>
 
@@ -153,11 +173,15 @@
           <input id="imageInput" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple hidden />
           <input id="folderInput" type="file" multiple webkitdirectory directory hidden />
           <div id="attachmentProcessing" class="attachment-processing hidden" role="status" aria-live="polite">
-            <span class="ai-spinner" aria-hidden="true"></span><span id="attachmentProcessingText">Membaca file…</span>
+            <span class="ai-spinner" aria-hidden="true"></span><span id="attachmentProcessingText" data-i18n="readingFile">Reading file…</span>
           </div>
           <div id="attachmentList" class="attachment-list hidden" aria-live="polite"></div>
+          <div id="skillBar" class="skill-bar">
+            <div id="skillChips" class="skill-chips" role="toolbar" aria-label="Skill MyAI"></div>
+            <div id="skillSuggest" class="skill-suggest hidden" role="listbox" aria-label="Perintah skill"></div>
+          </div>
           <label class="sr-only" for="input" data-i18n="writeMessage">Write a message</label>
-          <textarea id="input" rows="1" placeholder="Ask anything…"></textarea>
+          <textarea id="input" rows="1" placeholder="Ask anything…" data-i18n-placeholder="composerPlaceholderAuto"></textarea>
         <div class="composer-bar composer-toolbar">
           <div class="composer-toolbar-row composer-toolbar-primary">
             <div class="prompt-attach-actions">
@@ -173,25 +197,25 @@
               </div>
               <div class="attach-menu-divider" role="separator"></div>
               <div class="prompt-tool-buttons">
-                <button id="dictationBtn" type="button" class="dictation-btn" aria-label="Mulai dikte suara" title="Dikte suara" aria-pressed="false">🎙</button>
+                <button id="dictationBtn" type="button" class="dictation-btn" aria-label="Start voice dictation" title="Voice dictation" aria-pressed="false" data-i18n-aria-label="dictationStart" data-i18n-title="dictationTitle">🎙</button>
               </div>
             </div>
           </div>
             <div class="prompt-top-actions">
-              <button id="micBtn" type="button" class="mic-btn hidden" aria-label="Mulai percakapan suara atau video" title="Mulai percakapan suara" aria-pressed="false">
+              <button id="micBtn" type="button" class="mic-btn hidden" aria-label="Start voice or video conversation" title="Start voice conversation" aria-pressed="false" data-i18n-aria-label="voiceCallStart" data-i18n-title="voiceCallTitle">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v10m0 0a3 3 0 0 0 3-3V7a3 3 0 0 0-6 0v3a3 3 0 0 0 3 3Zm-7-3a7 7 0 0 0 14 0M12 17v4m-4 0h8" /></svg>
               </button>
-              <button id="sendBtn" type="submit" class="send-round primary idle" aria-label="Kirim" title="Kirim" disabled>↑</button>
+              <button id="sendBtn" type="submit" class="send-round primary idle" aria-label="Send" title="Send" disabled data-i18n-aria-label="sendMessage" data-i18n-title="sendMessage">↑</button>
             </div>
           </div>
           <div class="composer-toolbar-row composer-toolbar-secondary">
             <div class="prompt-helper-actions">
-              <button id="promptHelperBtn" class="prompt-helper-btn" type="button" title="Improve prompt with NVIDIA NIM" aria-label="Rapikan prompt">
+              <button id="promptHelperBtn" class="prompt-helper-btn" type="button" title="Improve the prompt for review before sending" aria-label="Improve prompt for review" data-i18n-aria-label="promptImproveHint" data-i18n-title="promptImproveHint">
                 <span aria-hidden="true">✨</span>
                 <span id="promptHelperLabel" data-i18n="promptImproveShort">Improve</span>
                 <span id="promptHelperSpinner" class="prompt-helper-spinner hidden" aria-hidden="true"></span>
               </button>
-              <button id="promptSuggestionBtn" class="prompt-suggestion-btn" type="button" aria-label="Saran prompt">
+              <button id="promptSuggestionBtn" class="prompt-suggestion-btn" type="button" aria-label="Prompt ideas" data-i18n-aria-label="promptSuggestAria">
                 <span class="prompt-suggestion-icon" aria-hidden="true">✦</span>
                 <span class="prompt-suggestion-label" data-i18n="promptSuggestShort">Ideas</span>
                 <span id="promptSuggestionSpinner" class="prompt-helper-spinner hidden" aria-hidden="true"></span>
@@ -212,8 +236,8 @@
                   <button type="button" role="menuitemradio" data-mode="pro" aria-checked="false"><span>◇</span><b data-i18n="modePro">Pro</b></button>
                   <button type="button" role="menuitemradio" data-mode="max" aria-checked="false"><span>◆</span><b data-i18n="modeMax">Max</b></button>
                   <button type="button" role="menuitemradio" data-mode="image" aria-checked="false"><span>▧</span><b data-i18n="modeImage">Image</b></button>
-                  <button id="imageAutoEnhance" class="image-auto-enhance-option" type="button" role="menuitemcheckbox" aria-checked="true"><span>✦</span><b>Sempurnakan prompt otomatis</b></button>
-                  <button id="imageVerifyMatch" class="image-auto-enhance-option" type="button" role="menuitemcheckbox" aria-checked="false" title="Gemini Image memakai satu pemeriksaan vision tambahan dan paling banyak satu regenerasi."><span>✓</span><b>Verifikasi kecocokan gambar (biaya ekstra)</b></button>
+                  <button id="imageAutoEnhance" class="image-auto-enhance-option" type="button" role="menuitemcheckbox" aria-checked="true"><span>✦</span><b data-i18n="autoEnhancePrompt">Auto-enhance prompt</b></button>
+                  <button id="imageVerifyMatch" class="image-auto-enhance-option" type="button" role="menuitemcheckbox" aria-checked="false" title="Gemini Image runs one extra vision check and at most one regeneration." data-i18n-title="verifyImageMatchHint"><span>✓</span><b data-i18n="verifyImageMatch">Verify image match (extra cost)</b></button>
                   <div class="task-mode-separator" role="separator"></div>
                   <button type="button" role="menuitemradio" data-composer-mode="web" aria-checked="false"><span>⌕</span><b data-i18n="webSearchMode">Web search</b></button>
                   <button type="button" role="menuitemradio" data-composer-mode="research" aria-checked="false"><span>✦</span><b data-i18n="deepResearchMode">Deep research</b></button>
@@ -221,13 +245,12 @@
               </div>
               <div class="prompt-tool-pickers">
                 <div id="modelPicker" class="model-picker">
-                  <button id="modelBtn" type="button" class="model-btn" aria-label="Pilih model AI" aria-haspopup="listbox" aria-expanded="false">
+                  <button id="modelBtn" type="button" class="model-btn" aria-label="Choose AI model" title="Choose AI model" aria-haspopup="listbox" aria-expanded="false" data-i18n-aria-label="selectModel" data-i18n-title="selectModel">
                     <span id="modelBtnLogo" class="mlogo"></span>
-                    <span class="model-btn-text"><span id="modelBtnName">Memuat model…</span><span id="modelBtnTier" class="model-btn-tier"></span></span>
-                    <span class="chev" aria-hidden="true"></span>
+                    <span class="model-btn-text"><span id="modelBtnName" data-i18n="loadingModel">Loading models…</span><span id="modelBtnTier" class="model-btn-tier"></span></span>
                   </button>
                   <div id="modelMenu" class="model-menu hidden" role="listbox">
-                    <input id="modelSearch" type="search" data-i18n-placeholder="modelSearchPlaceholder" placeholder="Search models… (Qwen, Gemini, DeepSeek)" autocomplete="off" />
+                    <input id="modelSearch" type="search" data-i18n-placeholder="modelSearchPlaceholder" placeholder="Search models… (Gemini, DeepSeek)" autocomplete="off" />
                     <div id="modelList" class="model-list"></div>
                   </div>
                 </div>
@@ -238,21 +261,21 @@
       </form>
       <div id="modeStatus" class="mode-status hidden" aria-live="polite">
         <span id="modeLabel"></span>
-        <button id="clearMode" type="button" aria-label="Matikan mode">×</button>
+        <button id="clearMode" type="button" aria-label="Turn off mode" data-i18n-aria-label="clearMode">×</button>
       </div>
       <aside id="artifactPanel" class="artifact-panel" aria-label="Artifacts" hidden>
-        <div class="artifact-resize-handle" role="separator" aria-orientation="vertical" aria-label="Ubah lebar panel Artifacts" aria-valuemin="300" aria-valuemax="720" aria-valuenow="420" tabindex="0"></div>
+        <div class="artifact-resize-handle" role="separator" aria-orientation="vertical" aria-label="Change Artifacts panel width" data-i18n-aria-label="artifactResize" aria-valuemin="300" aria-valuemax="720" aria-valuenow="420" tabindex="0"></div>
         <header class="artifact-panel-header">
-          <div class="artifact-panel-title"><span aria-hidden="true">◇</span><div><h2>Artifacts</h2><p id="artifactPanelSubtitle">Pratinjau kode</p></div></div>
+          <div class="artifact-panel-title"><span aria-hidden="true">◇</span><div><h2 data-i18n="artifactsTitle">Artifacts</h2><p id="artifactPanelSubtitle" data-i18n="artifactPreview">Code preview</p></div></div>
           <div class="artifact-panel-actions">
-            <button id="artifactShowCode" class="btn small ghost" type="button" aria-pressed="false">Code</button>
-            <button id="artifactRunPreview" class="btn small primary" type="button">▶ Run Preview</button>
-            <button id="artifactCopy" class="btn small ghost" type="button" aria-label="Salin artifact" title="Salin artifact">⧉</button>
-            <button id="artifactDownload" class="btn small ghost" type="button" aria-label="Unduh artifact" title="Unduh artifact">↓</button>
-            <button id="artifactClose" class="btn small ghost" type="button" aria-label="Tutup Artifacts" title="Tutup">×</button>
+            <button id="artifactShowCode" class="btn small ghost" type="button" aria-pressed="false" data-i18n="artifactShowCode">Code</button>
+            <button id="artifactRunPreview" class="btn small primary" type="button" data-i18n="artifactRunPreview">▶ Run Preview</button>
+            <button id="artifactCopy" class="btn small ghost" type="button" aria-label="Copy artifact" title="Copy artifact" data-i18n-aria-label="artifactCopy" data-i18n-title="artifactCopy">⧉</button>
+            <button id="artifactDownload" class="btn small ghost" type="button" aria-label="Download artifact" title="Download artifact" data-i18n-aria-label="artifactDownload" data-i18n-title="artifactDownload">↓</button>
+            <button id="artifactClose" class="btn small ghost" type="button" aria-label="Close Artifacts" title="Close" data-i18n-aria-label="artifactClose" data-i18n-title="artifactClose">×</button>
           </div>
         </header>
-        <iframe id="artifactPreviewFrame" title="Pratinjau artifact" sandbox="allow-scripts"></iframe>
+        <iframe id="artifactPreviewFrame" title="Artifact preview" data-i18n-title="artifactFrameTitle" sandbox="allow-scripts"></iframe>
         <pre id="artifactSource" class="artifact-source hidden"><code></code></pre>
       </aside>
       </div>
@@ -260,12 +283,12 @@
   </div>
 
   <dialog id="tierDialog" class="tier-dialog" aria-labelledby="tierDialogTitle">
-    <button id="closeTierDialog" class="dialog-close" type="button" aria-label="Close">×</button>
-    <p class="tier-eyebrow">MYAI ENGINE SELECTOR</p>
-    <h2 id="tierDialogTitle">Choose your AI engine</h2>
-    <p class="tier-dialog-copy">Select the model tier that fits your work.</p>
+    <button id="closeTierDialog" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+    <p class="tier-eyebrow" data-i18n="tierDialogEyebrow">MYAI ENGINE SELECTOR</p>
+    <h2 id="tierDialogTitle" data-i18n="tierDialogTitle">Choose your AI engine</h2>
+    <p class="tier-dialog-copy" data-i18n="tierDialogCopy">Select the model tier that fits your work.</p>
     <div id="tierCards" class="tier-cards" role="list"></div>
-    <button id="confirmTier" class="tier-confirm-btn" type="button" disabled>🚀 Activate engine</button>
+    <button id="confirmTier" class="tier-confirm-btn" type="button" disabled data-i18n="tierActivate">🚀 Activate engine</button>
   </dialog>
 
   <div id="loginIntro" class="login-intro" aria-hidden="true">
@@ -278,29 +301,29 @@
   <dialog id="voiceChatDialog" class="voice-chat-dialog" aria-labelledby="voiceChatTitle">
     <header class="voice-chat-header">
       <div class="voice-chat-heading">
-        <h2 id="voiceChatTitle">Percakapan suara</h2>
+        <h2 id="voiceChatTitle" data-i18n="voiceChatTitle">Voice conversation</h2>
         <span id="voiceChatModel" class="voice-chat-model"></span>
       </div>
-      <span id="voiceChatTimer" class="voice-chat-timer" aria-label="Durasi percakapan">00:00 / 10:00</span>
+      <span id="voiceChatTimer" class="voice-chat-timer" aria-label="Conversation duration" data-i18n-aria-label="voiceDuration">00:00 / 10:00</span>
     </header>
     <div class="voice-chat-stage">
-      <label class="voice-persona-picker" for="voicePersona">Bidang percakapan
+      <label class="voice-persona-picker" for="voicePersona"><span data-i18n="voicePersonaLabel">Conversation field</span>
         <select id="voicePersona">
-          <option value="general">Umum</option>
-          <option value="health">Kesehatan</option>
-          <option value="education">Pendidikan</option>
-          <option value="business">Bisnis</option>
-          <option value="technology">Teknologi</option>
-          <option value="law">Hukum</option>
-          <option value="finance">Keuangan</option>
-          <option value="creative">Kreatif</option>
-          <option value="career">Karier</option>
-          <option value="fitness">Kebugaran</option>
+          <option value="general" data-i18n="voicePersonaGeneral">General</option>
+          <option value="health" data-i18n="voicePersonaHealth">Health</option>
+          <option value="education" data-i18n="voicePersonaEducation">Education</option>
+          <option value="business" data-i18n="voicePersonaBusiness">Business</option>
+          <option value="technology" data-i18n="voicePersonaTechnology">Technology</option>
+          <option value="law" data-i18n="voicePersonaLaw">Law</option>
+          <option value="finance" data-i18n="voicePersonaFinance">Finance</option>
+          <option value="creative" data-i18n="voicePersonaCreative">Creative</option>
+          <option value="career" data-i18n="voicePersonaCareer">Career</option>
+          <option value="fitness" data-i18n="voicePersonaFitness">Fitness</option>
         </select>
       </label>
       <div class="voice-avatar-wrap">
         <div id="voiceOrb" class="voice-orb listening" aria-hidden="true"><span></span></div>
-        <div id="voiceAvatar" class="voice-avatar-scene" data-persona="general" aria-label="Avatar AI bidang umum">
+        <div id="voiceAvatar" class="voice-avatar-scene" data-persona="general" aria-label="AI avatar general field" data-i18n-aria-label="voiceAvatarAria">
           <span class="voice-scene-detail" aria-hidden="true"></span>
           <svg class="voice-person" viewBox="0 0 160 180" aria-hidden="true">
             <path class="person-hair" d="M43 73c-8-32 7-55 37-55s45 23 37 55l-8-14c-15 4-38 2-55-7z" />
@@ -314,29 +337,29 @@
             <path class="person-stethoscope" d="M61 128v13a19 19 0 0 0 38 0v-13m-19 32v5m-4 0h8" />
             <path class="person-tie" d="m75 132 5 5 5-5-2 18h-6z" />
           </svg>
-          <span class="voice-avatar-label" id="voiceAvatarLabel">Asisten AI</span>
+          <span class="voice-avatar-label" id="voiceAvatarLabel" data-i18n="voiceAvatarAssistant">AI assistant</span>
         </div>
-        <video id="voiceCameraPreview" class="voice-camera-preview hidden" autoplay muted playsinline aria-label="Pratinjau kamera lokal"></video>
+        <video id="voiceCameraPreview" class="voice-camera-preview hidden" autoplay muted playsinline aria-label="Local camera preview" data-i18n-aria-label="voiceCameraPreview"></video>
       </div>
-      <p id="voiceChatStatus" class="voice-chat-status" role="status" aria-live="polite">Menyiapkan mikrofon…</p>
+      <p id="voiceChatStatus" class="voice-chat-status" role="status" aria-live="polite" data-i18n="voicePreparingMic">Preparing microphone…</p>
       <p id="voiceChatTranscript" class="voice-chat-transcript" aria-live="polite"></p>
     </div>
     <footer class="voice-chat-controls">
-      <button id="voiceEnd" class="voice-control end" type="button" aria-label="Akhiri percakapan suara" title="Akhiri percakapan suara">×</button>
-      <button id="voiceCameraToggle" class="voice-control" type="button" aria-label="Aktifkan kamera" aria-pressed="false" title="Aktifkan kamera">
+      <button id="voiceEnd" class="voice-control end" type="button" aria-label="End voice conversation" title="End voice conversation" data-i18n-aria-label="voiceEndCall" data-i18n-title="voiceEndCall">×</button>
+      <button id="voiceCameraToggle" class="voice-control" type="button" aria-label="Turn on camera" aria-pressed="false" title="Turn on camera" data-i18n-aria-label="voiceToggleCamera" data-i18n-title="voiceToggleCamera">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 9l6-4v14l-6-4M4 7h10v10H4z" /></svg>
       </button>
-      <button id="voiceMicToggle" class="voice-control" type="button" aria-label="Jeda mikrofon" aria-pressed="true" title="Jeda mikrofon">🎙</button>
-      <button id="switchVoiceMode" class="voice-control mode-switch-control" type="button" aria-label="Beralih ke percakapan video">
+      <button id="voiceMicToggle" class="voice-control" type="button" aria-label="Pause microphone" aria-pressed="true" title="Pause microphone" data-i18n-aria-label="voicePauseMic" data-i18n-title="voicePauseMic">🎙</button>
+      <button id="switchVoiceMode" class="voice-control mode-switch-control" type="button" aria-label="Switch to video conversation" data-i18n-aria-label="voiceSwitchToVideo">
         <svg class="mode-icon-video" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 9l6-4v14l-6-4M4 7h10v10H4z" /></svg>
         <svg class="mode-icon-voice" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v10m0 0a3 3 0 0 0 3-3V7a3 3 0 0 0-6 0v3a3 3 0 0 0 3 3Zm-7-3a7 7 0 0 0 14 0M12 17v4m-4 0h8" /></svg>
-        <span id="switchVoiceModeLabel" class="sr-only">Beralih ke video</span>
+        <span id="switchVoiceModeLabel" class="sr-only" data-i18n="voiceSwitchToVideoShort">Switch to video</span>
       </button>
     </footer>
   </dialog>
 
   <div id="dropOverlay" class="drop-overlay hidden" aria-hidden="true">
-    <div class="drop-card"><span class="drop-icon">⇪</span><b>Lepaskan file di sini</b><span>Gambar, PDF, Word, Excel, PowerPoint, ZIP, kode, dan teks</span></div>
+    <div class="drop-card"><span class="drop-icon">⇪</span><b data-i18n="dropHere">Drop files here</b><span data-i18n="dropFileTypes">Images, PDF, Word, Excel, PowerPoint, ZIP, code, and text</span></div>
   </div>
   <dialog id="personalizationDialog" class="api-dialog personalization-dialog">
     <button id="closePersonalization" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
@@ -370,10 +393,16 @@
           </div>
           <div class="personalization-control personalization-theme">
             <span data-i18n="colorTheme">Color theme</span>
-            <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle theme">
-              <span class="theme-toggle-icon" aria-hidden="true">☀️</span>
-              <span id="themeToggleLabel">Light</span>
-            </button>
+            <div id="themeToggle" class="theme-choice-group" role="group" aria-label="Color theme">
+              <button class="theme-choice-button" type="button" data-theme-choice="light" aria-pressed="false">
+                <span aria-hidden="true">☀</span>
+                <span data-i18n="themeLight">Light</span>
+              </button>
+              <button class="theme-choice-button" type="button" data-theme-choice="dark" aria-pressed="true">
+                <span aria-hidden="true">☾</span>
+                <span data-i18n="themeDark">Dark</span>
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -423,6 +452,19 @@
         <label for="settingSystemPrompt"><span data-i18n="personalExtraInstructions">Anything else MyAI should keep in mind?</span> <span class="label-note" data-i18n="optional">(optional)</span></label>
         <textarea id="settingSystemPrompt" rows="3" maxlength="4000" data-i18n-placeholder="personalInstructionsPlaceholder" placeholder="Example: Use metric units. Explain unfamiliar terms the first time."></textarea>
       </section>
+      <section class="personalization-section local-ai-section" aria-labelledby="localAISectionTitle">
+        <div class="personalization-section-heading compact">
+          <span class="personalization-step">04</span>
+          <div><h3 id="localAISectionTitle" data-i18n="localAIHeading">Local AI</h3><p data-i18n="localAISetupHint">WebGPU runs in your browser. For Ollama, start the app and connect it.</p></div>
+        </div>
+        <p class="local-ai-privacy-note" data-i18n="localAIPrivacy">Prompts stay on your device</p>
+        <div class="local-ai-connect">
+          <label for="ollamaEndpointInput" class="sr-only" data-i18n="localOllamaEndpointLabel">Local Ollama address</label>
+          <input id="ollamaEndpointInput" type="text" inputmode="url" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:11434" />
+          <button id="ollamaConnectBtn" class="btn small" type="button" data-i18n="localOllamaConnect">Connect</button>
+        </div>
+        <p id="ollamaConnectStatus" class="local-ai-status" aria-live="polite"></p>
+      </section>
       <section class="personalization-preview" aria-live="polite">
         <div class="preview-mark" aria-hidden="true">✦</div>
         <div class="preview-copy"><span class="preview-kicker" data-i18n="personalPreview">MYAI PREVIEW</span><p id="personalizationPreviewText">Balanced approach · balanced length</p><small data-i18n="personalPreviewNote">Your actual request always takes priority.</small></div>
@@ -442,84 +484,84 @@
   <dialog id="promptSuggestionDialog" class="prompt-suggestions-dialog" aria-labelledby="promptSuggestionTitle">
     <button id="closePromptSuggestions" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
     <h2 id="promptSuggestionTitle" data-i18n="promptSuggestionTitle">Choose a prompt</h2>
-    <p class="muted" data-i18n="promptSuggestionDescription">Select a refinement to add to your original prompt. You can edit it afterward.</p>
+    <p class="muted" data-i18n="promptSuggestionDescription">Choose a complete prompt to replace your draft. Review or edit it in the composer before sending.</p>
     <div id="promptSuggestionList" class="prompt-suggestion-list"></div>
   </dialog>
   <dialog id="htmlPreviewDialog" class="html-preview-dialog" aria-labelledby="htmlPreviewTitle">
     <div class="preview-head">
-      <h2 id="htmlPreviewTitle">Pratinjau</h2>
+      <h2 id="htmlPreviewTitle" data-i18n="htmlPreviewTitle">Preview</h2>
       <div class="preview-actions">
-        <div class="preview-mode" role="group" aria-label="Mode pratinjau">
-          <button id="toggleHtmlPreview" class="btn small ghost" type="button" aria-pressed="true">👁️ Live Preview</button>
-          <button id="toggleHtmlCode" class="btn small ghost" type="button" aria-pressed="false">💻 Code</button>
+        <div class="preview-mode" role="group" aria-label="Preview mode" data-i18n-aria-label="previewModeGroup">
+          <button id="toggleHtmlPreview" class="btn small ghost" type="button" aria-pressed="true" data-i18n="htmlPreviewLive">👁️ Live Preview</button>
+          <button id="toggleHtmlCode" class="btn small ghost" type="button" aria-pressed="false" data-i18n="htmlPreviewCode">💻 Code</button>
         </div>
-        <button id="reloadHtmlPreview" class="btn small ghost" type="button" title="Jalankan ulang pratinjau">↻ Muat ulang</button>
-        <button id="fullscreenHtmlPreview" class="btn small ghost" type="button" title="Buka layar penuh">⛶ Layar penuh</button>
-        <button id="copyHtmlPreviewCode" class="btn small ghost" type="button" title="Salin kode">⧉ Salin</button>
-        <button id="downloadHtmlPreview" class="btn small ghost" type="button" title="Unduh sebagai file .html">⬇ Unduh .html</button>
-        <button id="closeHtmlPreview" class="dialog-close preview-close" type="button" aria-label="Tutup pratinjau" title="Tutup (Esc)">×</button>
+        <button id="reloadHtmlPreview" class="btn small ghost" type="button" title="Rerun preview" data-i18n-title="htmlPreviewReloadHint" data-i18n="htmlPreviewReload">↻ Reload</button>
+        <button id="fullscreenHtmlPreview" class="btn small ghost" type="button" title="Open fullscreen" data-i18n-title="htmlPreviewFullscreenHint" data-i18n="htmlPreviewFullscreen">⛶ Fullscreen</button>
+        <button id="copyHtmlPreviewCode" class="btn small ghost" type="button" title="Copy code" data-i18n-title="htmlPreviewCopyHint" data-i18n="htmlPreviewCopy">⧉ Copy</button>
+        <button id="downloadHtmlPreview" class="btn small ghost" type="button" title="Download as .html file" data-i18n-title="htmlPreviewDownloadHint" data-i18n="htmlPreviewDownload">⬇ Download .html</button>
+        <button id="closeHtmlPreview" class="dialog-close preview-close" type="button" aria-label="Close preview" title="Close (Esc)" data-i18n-aria-label="htmlPreviewClose" data-i18n-title="htmlPreviewCloseHint">×</button>
       </div>
     </div>
-    <iframe id="htmlPreviewFrame" title="Pratinjau kode" sandbox="allow-scripts"></iframe>
+    <iframe id="htmlPreviewFrame" title="Code preview" data-i18n-title="htmlPreviewFrameTitle" sandbox="allow-scripts"></iframe>
     <div id="htmlPreviewCodePanel" class="html-preview-code-panel hidden"><pre><code id="htmlPreviewCode"></code></pre></div>
   </dialog>
   <dialog id="filePreviewDialog" class="file-preview-dialog" aria-labelledby="filePreviewTitle">
     <div class="file-preview-head">
-      <div class="file-preview-heading"><h2 id="filePreviewTitle">Pratinjau file</h2><span id="filePreviewExtension" class="file-preview-extension">FILE</span></div>
+      <div class="file-preview-heading"><h2 id="filePreviewTitle" data-i18n="filePreviewTitle">File preview</h2><span id="filePreviewExtension" class="file-preview-extension">FILE</span></div>
       <div class="file-preview-actions">
-        <button id="reloadFilePreview" class="btn small ghost" type="button" title="Muat ulang">↻ Muat ulang</button>
-        <button id="copyFilePreviewContent" class="btn small ghost" type="button" title="Salin isi">⧉ Salin</button>
-        <button id="fullscreenFilePreview" class="btn small ghost" type="button" title="Buka layar penuh">⛶ Layar penuh</button>
-        <button id="downloadFilePreview" class="btn small ghost" type="button" title="Unduh file">⬇ Unduh</button>
+        <button id="reloadFilePreview" class="btn small ghost" type="button" title="Reload" data-i18n-title="htmlPreviewReloadHint" data-i18n="filePreviewReload">↻ Reload</button>
+        <button id="copyFilePreviewContent" class="btn small ghost" type="button" title="Copy content" data-i18n-title="filePreviewCopyHint" data-i18n="htmlPreviewCopy">⧉ Copy</button>
+        <button id="fullscreenFilePreview" class="btn small ghost" type="button" title="Open fullscreen" data-i18n-title="htmlPreviewFullscreenHint" data-i18n="htmlPreviewFullscreen">⛶ Fullscreen</button>
+        <button id="downloadFilePreview" class="btn small ghost" type="button" title="Download file" data-i18n-title="filePreviewDownloadHint" data-i18n="imageLightboxDownload">⬇ Download</button>
         <button id="closeFilePreview" class="dialog-close preview-close" type="button" aria-label="Tutup" data-i18n-aria-label="closeDialog">×</button>
       </div>
     </div>
     <div id="filePreviewContent" class="file-preview-content"></div>
   </dialog>
   <dialog id="imageLightboxDialog" class="image-lightbox-dialog" aria-labelledby="imageLightboxTitle">
-    <div class="image-lightbox-head"><h2 id="imageLightboxTitle">Pratinjau gambar</h2><div>
-      <button id="downloadLightboxImage" class="btn small ghost" type="button">⬇ Unduh</button>
-      <button id="closeImageLightbox" class="dialog-close preview-close" type="button" aria-label="Tutup">×</button>
+    <div class="image-lightbox-head"><h2 id="imageLightboxTitle" data-i18n="imageLightboxTitle">Image preview</h2><div>
+      <button id="downloadLightboxImage" class="btn small ghost" type="button" data-i18n="imageLightboxDownload">⬇ Download</button>
+      <button id="closeImageLightbox" class="dialog-close preview-close" type="button" aria-label="Close" data-i18n-aria-label="imageLightboxClose">×</button>
     </div></div>
-    <img id="imageLightboxImage" alt="Pratinjau gambar layar penuh" />
+    <img id="imageLightboxImage" alt="Fullscreen image preview" data-i18n-title="imageLightboxAlt" />
   </dialog>
   <dialog id="workFolderDialog" class="api-dialog">
     <button id="closeWorkFolderDialog" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
-    <h2>Buat folder kerja</h2>
+    <h2 data-i18n="workFolderTitle">Create work folder</h2>
     <form id="workFolderForm">
-      <label for="workFolderName">Nama folder</label>
-      <input id="workFolderName" type="text" maxlength="60" required autocomplete="off" placeholder="Contoh: Proyek sekolah" />
+      <label for="workFolderName" data-i18n="workFolderName">Folder name</label>
+      <input id="workFolderName" type="text" maxlength="60" required autocomplete="off" placeholder="Example: School project" data-i18n-placeholder="workFolderNamePlaceholder" />
       <p id="workFolderError" class="login-error hidden" role="alert"></p>
       <div class="dialog-actions">
-        <button class="btn ghost" id="cancelWorkFolder" type="button">Batal</button>
-        <button class="btn primary" type="submit">Buat folder</button>
+        <button class="btn ghost" id="cancelWorkFolder" type="button" data-i18n="cancel">Cancel</button>
+        <button class="btn primary" type="submit" data-i18n="workFolderCreate">Create folder</button>
       </div>
     </form>
   </dialog>
   <dialog id="apiDialog" class="api-dialog" aria-labelledby="apiDialogTitle">
     <button id="closeApiDialog" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
-    <h2 id="apiDialogTitle">Tes provider AI</h2>
+    <h2 id="apiDialogTitle" data-i18n="apiDialogTitle">Test AI providers</h2>
     <div class="dialog-actions provider-health-actions">
-      <button id="testAllProviders" class="btn primary" type="button">Tes semua provider</button>
+      <button id="testAllProviders" class="btn primary" type="button" data-i18n="apiTestAll">Test all providers</button>
     </div>
     <p id="providerHealthSummary" class="api-key-status" role="status" aria-live="polite"></p>
-    <div id="apiProviderList" class="api-provider-list" aria-label="Status provider AI"></div>
+    <div id="apiProviderList" class="api-provider-list" aria-label="AI provider status" data-i18n-aria-label="apiProviderListAria"></div>
   </dialog>
   <dialog id="usageDashboardDialog" class="api-dialog usage-dashboard-dialog" aria-labelledby="usageDashboardTitle">
     <button id="closeUsageDashboard" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
-    <h2 id="usageDashboardTitle">Token &amp; API health</h2>
+    <h2 id="usageDashboardTitle" data-i18n="usageDashboardTitle">Token &amp; API health</h2>
     <div class="usage-summary-grid">
-      <div><span>Percakapan ini</span><strong id="usageDashboardConversationSummary">0</strong></div>
-      <div><span>Sesi tab ini</span><strong id="usageDashboardSession">0</strong></div>
-      <div><span>Hari ini</span><strong id="usageDashboardDaily">0</strong></div>
+      <div><span data-i18n="usageThisChat">This conversation</span><strong id="usageDashboardConversationSummary">0</strong></div>
+      <div><span data-i18n="usageThisTab">This tab session</span><strong id="usageDashboardSession">0</strong></div>
+      <div><span data-i18n="usageToday">Today</span><strong id="usageDashboardDaily">0</strong></div>
     </div>
     <section class="usage-health-section" aria-labelledby="usageHealthTitle">
-      <h3 id="usageHealthTitle">Status provider</h3>
+      <h3 id="usageHealthTitle" data-i18n="usageProviderStatus">Provider status</h3>
       <div id="usageProviderList" class="usage-provider-list" aria-live="polite"></div>
     </section>
     <div class="dialog-actions usage-dialog-actions">
-      <button id="configureProviderKeys" class="btn ghost" type="button">Konfigurasi provider</button>
-      <button id="resetUsageCounters" class="btn danger" type="button">Reset counter</button>
+      <button id="configureProviderKeys" class="btn ghost" type="button" data-i18n="usageConfigureProviders">Configure providers</button>
+      <button id="resetUsageCounters" class="btn danger" type="button" data-i18n="usageResetCounters">Reset counters</button>
     </div>
   </dialog>
   <dialog id="monidDialog" class="api-dialog monid-dialog" aria-labelledby="monidTitle">
@@ -528,34 +570,34 @@
     <p class="muted" data-i18n="monidDescription">Find a Monid data endpoint, review its schema and price, and run it only after approval. Usage may reduce your Monid balance.</p>
     <form id="monidSearchForm">
       <label for="monidQuery" data-i18n="searchData">What data do you want to find?</label>
-      <textarea id="monidQuery" rows="2" maxlength="1000" required placeholder="Example: latest news about renewable energy"></textarea>
+      <textarea id="monidQuery" rows="2" maxlength="1000" required placeholder="Example: latest news about renewable energy" data-i18n-placeholder="monidQueryPlaceholder"></textarea>
       <div class="dialog-actions"><button id="monidSearchButton" class="btn primary" type="submit" data-i18n="searchEndpoint">Search endpoints</button></div>
     </form>
-    <p id="monidStatus" class="api-key-status" role="status" aria-live="polite">Masuk dengan akun dan pastikan secret MONID_API_KEY tersedia di Cloudflare Worker.</p>
+    <p id="monidStatus" class="api-key-status" role="status" aria-live="polite" data-i18n="monidStatusHint">Sign in with an account and make sure the MONID_API_KEY secret is available on the Cloudflare Worker.</p>
     <div id="monidResults" class="monid-results" aria-live="polite"></div>
-    <section id="monidEndpointDetails" class="monid-endpoint-details hidden" aria-label="Detail endpoint Monid">
+    <section id="monidEndpointDetails" class="monid-endpoint-details hidden" aria-label="Monid endpoint details" data-i18n-aria-label="monidEndpointDetailsAria">
       <h3 id="monidEndpointTitle"></h3>
       <p id="monidEndpointPrice" class="api-key-status"></p>
       <pre id="monidEndpointSchema"></pre>
-      <label for="monidInputJson">Input endpoint (JSON)</label>
+      <label for="monidInputJson" data-i18n="monidInputJsonLabel">Endpoint input (JSON)</label>
       <textarea id="monidInputJson" rows="5" spellcheck="false">{}</textarea>
       <div class="dialog-actions"><button id="monidRunButton" class="btn primary" type="button" data-i18n="runEndpoint">Run endpoint (may cost money)</button></div>
     </section>
     <pre id="monidRunOutput" class="monid-run-output hidden" aria-live="polite"></pre>
     <section class="explorium-research-section" aria-labelledby="exploriumResearchTitle">
-      <h3 id="exploriumResearchTitle">Riset perusahaan dengan Explorium</h3>
-      <p class="muted">Cari satu perusahaan dalam mode preview. Pencarian dapat menggunakan kredit akun Explorium.</p>
+      <h3 id="exploriumResearchTitle" data-i18n="exploriumResearchTitle">Company research with Explorium</h3>
+      <p class="muted" data-i18n="exploriumDescription">Search one company in preview mode. Searches may use Explorium account credits.</p>
       <form id="exploriumSearchForm">
-        <label for="exploriumCompany">Nama perusahaan</label>
-        <input id="exploriumCompany" type="text" maxlength="256" required placeholder="Contoh: Microsoft">
-        <div class="dialog-actions"><button id="exploriumSearchButton" class="btn primary" type="submit">Cari data perusahaan</button></div>
+        <label for="exploriumCompany" data-i18n="exploriumCompanyLabel">Company name</label>
+        <input id="exploriumCompany" type="text" maxlength="256" required placeholder="Example: Microsoft" data-i18n-placeholder="exploriumCompanyPlaceholder">
+        <div class="dialog-actions"><button id="exploriumSearchButton" class="btn primary" type="submit" data-i18n="exploriumSearchButton">Search company data</button></div>
       </form>
-      <p id="exploriumStatus" class="api-key-status" role="status" aria-live="polite">Hasil Explorium dan Monid dapat digabungkan untuk diekspor.</p>
+      <p id="exploriumStatus" class="api-key-status" role="status" aria-live="polite" data-i18n="exploriumStatusHint">Explorium and Monid results can be combined for export.</p>
       <pre id="exploriumOutput" class="monid-run-output hidden" aria-live="polite"></pre>
-      <div id="researchExportActions" class="dialog-actions hidden" aria-label="Ekspor hasil riset">
-        <button class="btn small ghost" type="button" data-research-format="docx">Unduh DOCX</button>
-        <button class="btn small ghost" type="button" data-research-format="pptx">Unduh PPT</button>
-        <button class="btn small ghost" type="button" data-research-format="xlsx">Unduh Excel</button>
+      <div id="researchExportActions" class="dialog-actions hidden" aria-label="Export research results" data-i18n-aria-label="researchExportAria">
+        <button class="btn small ghost" type="button" data-research-format="docx" data-i18n="downloadDocx">Download DOCX</button>
+        <button class="btn small ghost" type="button" data-research-format="pptx" data-i18n="downloadPpt">Download PPT</button>
+        <button class="btn small ghost" type="button" data-research-format="xlsx" data-i18n="downloadXlsx">Download Excel</button>
       </div>
     </section>
   </dialog>
@@ -568,6 +610,42 @@
       <button id="cancelPremiumConfirm" class="btn ghost" type="button" data-i18n="cancel">Cancel</button>
       <button id="acceptPremiumConfirm" class="btn primary" type="button" data-i18n="continueAction">Continue</button>
     </div>
+  </dialog>
+  <dialog id="reportContentDialog" class="api-dialog" aria-labelledby="reportContentTitle">
+    <button id="closeReportContent" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+    <h2 id="reportContentTitle" data-i18n="reportContentTitle">Report AI response</h2>
+    <p class="muted" data-i18n="reportContentDescription">Choose a reason and continue to a sharing app to send the report. MyAI does not receive this report automatically.</p>
+    <form id="reportContentForm">
+      <label for="reportContentReason" data-i18n="reportReasonLabel">Report reason</label>
+      <select id="reportContentReason" required>
+        <option value="harmful" data-i18n="reportReasonHarmful">Harmful or unsafe content</option>
+        <option value="inaccurate" data-i18n="reportReasonInaccurate">Misleading or dangerous information</option>
+        <option value="privacy" data-i18n="reportReasonPrivacy">Privacy or personal data</option>
+        <option value="other" data-i18n="reportReasonOther">Other</option>
+      </select>
+      <label for="reportContentDetails" data-i18n="reportDetailsLabel">Additional details (optional)</label>
+      <textarea id="reportContentDetails" rows="3" maxlength="1000"></textarea>
+      <div class="dialog-actions">
+        <button id="cancelReportContent" class="btn ghost" type="button" data-i18n="cancel">Cancel</button>
+        <button class="btn primary" type="submit" data-i18n="reportShareButton">Share report</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="memoryDialog" class="api-dialog memory-dialog" aria-labelledby="memoryDialogTitle">
+    <button id="closeMemoryDialog" class="dialog-close" type="button" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+    <h2 id="memoryDialogTitle" data-i18n="memoryDialogTitle">🧠 MyAI Memory</h2>
+    <p class="muted memory-dialog-lead" data-i18n="memoryDialogLead">Notes you save will be remembered by MyAI in future conversations. Use them for preferences, important facts, or your favorite answer style. Notes stay on this device.</p>
+    <div id="memoryNoteList" class="memory-note-list" aria-live="polite"></div>
+    <form id="memoryNoteForm" class="memory-note-form">
+      <label for="memoryNoteLabel" data-i18n="memoryNoteLabel">Label (optional)</label>
+      <input id="memoryNoteLabel" type="text" maxlength="90" placeholder="Example: Favorite answer style" data-i18n-placeholder="memoryNoteLabelPlaceholder" />
+      <label for="memoryNoteText" data-i18n="memoryNoteTextLabel">Note content</label>
+      <textarea id="memoryNoteText" rows="3" maxlength="1200" placeholder="Example: Always answer concisely with practical examples." data-i18n-placeholder="memoryNoteTextPlaceholder" required></textarea>
+      <div class="dialog-actions">
+        <button id="cancelMemoryForm" class="btn ghost" type="button" data-i18n="cancel">Cancel</button>
+        <button class="btn primary" type="submit" data-i18n="memorySaveButton">Save to memory</button>
+      </div>
+    </form>
   </dialog>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 </body>

@@ -9,7 +9,6 @@ export function createGuestHandlers(dependencies) {
     enforceGuestRateLimit,
     validateChatBody,
     withUserPersonalization,
-    sendGeminiRequest,
     sendOpenAIRequest,
     transcribeAudio,
     corsHeaders,
@@ -64,7 +63,7 @@ export function createGuestHandlers(dependencies) {
   function freeGatewayModels(groups) {
     const models = groups.flatMap((group) => {
       const provider = group.provider.replace(/^gateway-/, "");
-      if (!["gemini", "groq", "nvidia"].includes(provider)) return [];
+      if (!["groq", "nvidia"].includes(provider)) return [];
       return group.models
         .filter((model) => provider === "nvidia"
           ? ["free", "basic"].includes(model.accessTier) && !model.imageSupport
@@ -88,7 +87,6 @@ export function createGuestHandlers(dependencies) {
         id: `${model.provider}::${model.id}`,
         name: `${model.name} · ${({
           nvidia: "NVIDIA NIM",
-          gemini: "Gemini",
           groq: "Groq",
         })[model.provider]}`,
         backendProvider: model.provider,
@@ -100,9 +98,9 @@ export function createGuestHandlers(dependencies) {
     if (keys.openrouter) {
       const preferredFamilies = [
         /nvidia|nemotron/i,
-        /qwen/i,
         /deepseek/i,
         /llama|meta/i,
+        /qwen|qwq/i,
         /gemma|google/i,
         /mistral/i,
         /phi|microsoft/i,
@@ -126,6 +124,7 @@ export function createGuestHandlers(dependencies) {
       models.push(...selected.map((model) => ({
         id: `openrouter::${model.id}`,
         name: model.name,
+        backendProvider: "openrouter",
         accessTier: "free",
         priceTier: "free",
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
@@ -139,7 +138,7 @@ export function createGuestHandlers(dependencies) {
     const { deviceId } = await validateGuestAccess(request, env);
     const trial = await guestTrialCounter(request, env, "status", deviceId);
     let freeOpenRouterModels = [];
-    const gatewayCatalog = await gatewayModelGroups(keys, ["nvidia", "gemini", "groq"]);
+    const gatewayCatalog = await gatewayModelGroups(keys, ["nvidia", "groq"]);
     if (keys.openrouter) {
       try {
         freeOpenRouterModels = await listOpenRouterModels();
@@ -172,7 +171,7 @@ export function createGuestHandlers(dependencies) {
     const separator = typeof body.model === "string" ? body.model.indexOf("::") : -1;
     let selectedProvider = separator > 0 ? body.model.slice(0, separator) : "";
     let selectedModel = separator > 0 ? body.model.slice(separator + 2) : "";
-    const gatewayCatalog = await gatewayModelGroups(keys, ["nvidia", "gemini", "groq"]);
+    const gatewayCatalog = await gatewayModelGroups(keys, ["nvidia", "groq"]);
     const freeModels = freeGatewayModels(gatewayCatalog.groups);
     const webSearch = body.webSearch === true;
     const researchMode = body.researchMode === true;
@@ -180,9 +179,6 @@ export function createGuestHandlers(dependencies) {
       if (freeModels.some((model) => model.provider === "nvidia")) {
         selectedProvider = "nvidia";
         selectedModel = freeModels.find((model) => model.provider === "nvidia").id;
-      } else if (freeModels.some((model) => model.provider === "gemini")) {
-        selectedProvider = "gemini";
-        selectedModel = freeModels.find((model) => model.provider === "gemini").id;
       } else if (freeModels.some((model) => model.provider === "groq")) {
         selectedProvider = "groq";
         selectedModel = freeModels.find((model) => model.provider === "groq").id;
@@ -193,12 +189,8 @@ export function createGuestHandlers(dependencies) {
       }
 
     }
-    if (webSearch && !["gemini", "openrouter"].includes(selectedProvider)) {
-      const geminiModel = freeModels.find((model) => model.provider === "gemini");
-      if (geminiModel) {
-        selectedProvider = "gemini";
-        selectedModel = geminiModel.id;
-      } else if (keys.openrouter) {
+    if (webSearch && selectedProvider !== "openrouter") {
+      if (keys.openrouter) {
         const openRouterModels = await listOpenRouterModels();
         selectedProvider = "openrouter";
         selectedModel = openRouterModels[0]?.id || "";
@@ -209,8 +201,8 @@ export function createGuestHandlers(dependencies) {
       || !Array.isArray(body.messages) || !body.messages.length) {
       throw new HttpError(400, "Permintaan AI guest tidak valid.");
     }
-    if (webSearch && !["gemini", "openrouter"].includes(selectedProvider)) {
-      throw new HttpError(503, "Pencarian web guest membutuhkan Gemini atau model OpenRouter gratis yang tersedia.");
+    if (webSearch && selectedProvider !== "openrouter") {
+      throw new HttpError(503, "Pencarian web guest membutuhkan model OpenRouter gratis yang tersedia.");
     }
     if (new TextEncoder().encode(JSON.stringify(body)).byteLength > GUEST_MAX_REQUEST_BYTES) {
       throw new HttpError(413, "Permintaan guest terlalu besar. Kurangi teks atau gambar.");
@@ -228,11 +220,11 @@ export function createGuestHandlers(dependencies) {
     if (images.length > 1 || images.some((image) => typeof image !== "string" || image.length > GUEST_MAX_IMAGE_CHARS)) {
       throw new HttpError(413, "AI guest menerima satu gambar kecil per pesan.");
     }
-    if (images.length && !keys.gemini) {
-      throw new HttpError(503, "Analisis gambar guest belum tersedia. Admin perlu mengatur Gemini di Worker.");
+    if (images.length) {
+      throw new HttpError(400, "Analisis gambar tidak tersedia untuk AI guest saat ini.");
     }
 
-    if (["gemini", "groq", "nvidia"].includes(selectedProvider)
+    if (["groq", "nvidia"].includes(selectedProvider)
       && !freeModels.some((model) => model.provider === selectedProvider && model.id === selectedModel)) {
       throw new HttpError(400, "Model guest tidak tersedia pada katalog tier dasar provider saat ini. Muat ulang daftar model.");
     }
@@ -242,11 +234,6 @@ export function createGuestHandlers(dependencies) {
         throw new HttpError(400, "Model ini tidak lagi terverifikasi gratis. Muat ulang daftar model.");
       }
     }
-    if (images.length && (selectedProvider !== "gemini"
-      || !freeModels.some((model) => model.provider === "gemini" && model.id === selectedModel && model.imageSupport))) {
-      throw new HttpError(400, "Model AI gratis yang dipilih tidak mendukung gambar.");
-    }
-
     const normalizedMessages = withUserPersonalization([
       {
         role: "system",
@@ -274,7 +261,7 @@ export function createGuestHandlers(dependencies) {
     }
     const uniqueProviders = providers.filter((item, index, list) =>
       list.findIndex((candidate) => candidate.provider === item.provider && candidate.model === item.model) === index);
-    if (!uniqueProviders.length) throw new HttpError(503, "AI guest belum aktif. Admin perlu menyiapkan NVIDIA NIM, Gemini, Groq, atau OpenRouter di Worker.");
+    if (!uniqueProviders.length) throw new HttpError(503, "AI guest belum aktif. Admin perlu menyiapkan NVIDIA NIM, Groq, atau OpenRouter di Worker.");
 
     await enforceGuestRateLimit(request, env, deviceId);
     const trial = await guestTrialCounter(request, env, "reserve", deviceId);
@@ -294,9 +281,7 @@ export function createGuestHandlers(dependencies) {
           researchMode,
         }, keys);
         input.maxOutputTokens = GUEST_MAX_OUTPUT_TOKENS;
-        const response = provider === "gemini"
-          ? await sendGeminiRequest(input, keys.gemini, request)
-          : await sendOpenAIRequest(request, input, keys[provider]);
+        const response = await sendOpenAIRequest(request, input, keys[provider]);
         if (response.ok) {
           const headers = new Headers(response.headers);
           for (const [name, value] of Object.entries(corsHeaders(request))) headers.set(name, value);
@@ -362,7 +347,7 @@ export async function handleGuestRoute(request, env, dependencies) {
     return jsonResponse({ turnstileSiteKey: siteKey }, 200, request);
   }
   if (guestImageRoute === "guest/images/pollinations" || imageRoute === "images/pollinations") {
-    throw new HttpError(410, "Pembuatan gambar Pollinations kini dimuat langsung oleh browser.");
+    throw new HttpError(410, "Pembuatan dan edit gambar hanya tersedia melalui Gemini Image di OpenRouter.");
   }
   if (!["guest/models", "guest/chat", "guest/transcribe"].includes(guestRoute)) return null;
 

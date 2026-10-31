@@ -1,3 +1,5 @@
+import { saveBlob } from "./platform.js?v=20261029-v5.130";
+
 function cleanAnswer(content) {
   const text = String(content || "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   const fenced = text.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/i);
@@ -137,7 +139,7 @@ async function exportWord(title, blocks, options = {}) {
     }],
   }));
   const filename = safeFilename(title, "docx");
-  if (options.download !== false) saveBlob(blob, filename);
+  if (options.download !== false) await saveBlob(blob, filename);
   return { blob, filename };
 }
 
@@ -377,10 +379,10 @@ async function exportSpreadsheet(title, blocks, requestedSheetName = "", structu
   const XLSX = imported.utils ? imported : imported.default;
   const workbook = XLSX.utils.book_new();
   const filename = safeFilename(title, "xlsx");
-  const writeWorkbook = () => {
+  const writeWorkbook = async () => {
     const output = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
     const blob = new Blob([output], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    if (options.download !== false) saveBlob(blob, filename);
+    if (options.download !== false) await saveBlob(blob, filename);
     return { blob, filename };
   };
   workbook.Props = { Title: title, Subject: "Spreadsheet dibuat dari jawaban MyAI", Author: "MyAI" };
@@ -546,19 +548,8 @@ async function exportPdf(title, blocks, options = {}) {
   }
   const filename = safeFilename(title, "pdf");
   const blob = pdf.output("blob");
-  if (download) saveBlob(blob, filename);
+  if (download) await saveBlob(blob, filename);
   return { blob, filename };
-}
-
-function saveBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function exportAssistantDocument(

@@ -1,13 +1,25 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
-  appId: "com.myai.assistant",
+  appId: "com.firmansyahazharikuy6.myai",
   appName: "MyAI",
   webDir: "www",
+  androidScheme: "https",
   plugins: {
     FirebaseAuthentication: {
-      skipNativeAuth: true,
       providers: ["google.com", "github.com"],
+    },
+    Keyboard: {
+      resize: "body",
+      resizeOnFullScreen: true,
+    },
+    SplashScreen: {
+      launchShowDuration: 1800,
+      launchAutoHide: true,
+      backgroundColor: "#11131b",
+      androidSplashResourceName: "splash",
+      androidScaleType: "CENTER_INSIDE",
+      showSpinner: false,
     },
   },
   ios: {

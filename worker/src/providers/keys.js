@@ -1,17 +1,24 @@
-const PROVIDER_KEY_NAMES = ["openrouter", "gemini", "groq", "nvidia", "monid", "explorium"];
+const PROVIDER_KEY_NAMES = ["openrouter", "groq", "nvidia", "claude", "kimi", "monid", "explorium"];
 
 export function readProviderKeys(raw, env, HttpError) {
   const keys = {};
   const warnings = [];
   const firstConfiguredSecret = (...values) => values.find((value) => typeof value === "string" && value.trim())?.trim();
   const aliases = {
+    anthropic: "claude",
+    anthropic_api_key: "claude",
+    claude: "claude",
+    claude_api_key: "claude",
+    kimi: "kimi",
+    kimi_api_key: "kimi",
+    moonshot: "kimi",
+    moonshot_api_key: "kimi",
     nvidia_nim: "nvidia",
     nvidia_nim_api_key: "nvidia",
     nvidia_api_key: "nvidia",
     monid_api_key: "monid",
     explorium_api_key: "explorium",
     openrouter_api_key: "openrouter",
-    gemini_api_key: "gemini",
     groq_api_key: "groq",
   };
   if (typeof raw === "string" && raw.trim()) {
@@ -35,9 +42,10 @@ export function readProviderKeys(raw, env, HttpError) {
   }
   const individualSecrets = {
     openrouter: firstConfiguredSecret(env.OPENROUTER_API_KEY),
-    gemini: firstConfiguredSecret(env.GEMINI_API_KEY),
     groq: firstConfiguredSecret(env.GROQ_API_KEY),
     nvidia: firstConfiguredSecret(env.NVIDIA_API_KEY, env.NVIDIA_NIM_API_KEY),
+    claude: firstConfiguredSecret(env.CLAUDE_API_KEY, env.ANTHROPIC_API_KEY),
+    kimi: firstConfiguredSecret(env.KIMI_API_KEY, env.MOONSHOT_API_KEY),
     monid: firstConfiguredSecret(env.MONID_API_KEY),
     explorium: firstConfiguredSecret(env.EXPLORIUM_API_KEY),
   };

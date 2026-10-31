@@ -15,6 +15,9 @@ const API_ROUTES = new Map([
   ["/api/live/token", "/live/token"],
   ["/api/transcribe", "/transcribe"],
   ["/api/images/generate", "/images/generate"],
+  ["/api/images/status", "/images/status"],
+  ["/api/images/cancel", "/images/cancel"],
+  ["/api/images/quota", "/images/quota"],
   ["/api/images/pollinations", "/images/pollinations"],
   ["/api/presentation", "/presentation"],
   ["/api/canva/oauth/start", "/canva/oauth/start"],
@@ -24,6 +27,7 @@ const API_ROUTES = new Map([
   ["/api/monid/run", "/monid/run"],
   ["/api/monid/get", "/monid/get"],
   ["/api/explorium/search", "/explorium/search"],
+  ["/api/send-email/preview", "/send-email/preview"],
 ]);
 const ALLOWED_ORIGINS = new Set([
   "https://myai-v3-firmansyah.pages.dev",
@@ -33,14 +37,16 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:5173",
   "http://127.0.0.1:5173",
   "capacitor://localhost",
+  "https://localhost",
 ]);
+const ALLOWED_REQUEST_HEADERS = "Content-Type, Authorization, X-Requested-With, X-Turnstile-Token, X-Guest-Device-Id, X-Email-Confirmation";
 function buildCorsHeaders(request) {
   const origin = request.headers.get("Origin");
   const allowOrigin = origin && ALLOWED_ORIGINS.has(origin) ? origin : "";
   return {
     ...(allowOrigin ? { "Access-Control-Allow-Origin": allowOrigin } : {}),
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+    "Access-Control-Allow-Headers": ALLOWED_REQUEST_HEADERS,
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
   };

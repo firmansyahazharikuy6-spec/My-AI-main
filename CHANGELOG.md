@@ -9,6 +9,7 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 - **Metode masuk:** README sumber di luar catatan versi pernah menyarankan Email/Password dan Phone. UI saat ini menawarkan Google/GitHub; Worker menolak provider `password` dan `phone` untuk API AI.
 - **Harga:** label tier/harga dalam katalog bukan jaminan biaya nol, akses provider, atau ketersediaan. Verifikasi tarif serta syarat retensi pada provider yang benar-benar dipakai.
 - **Provider langsung yang dihapus:** adapter Anthropic Claude dan Moonshot Kimi tidak lagi tersedia sebagai provider langsung pada UI atau Worker. Catatan lama tentang integrasi dan secret-nya di bawah dipertahankan untuk riwayat, bukan petunjuk setup aktif. Model dari brand tersebut mungkin masih dapat muncul dalam katalog agregat OpenRouter; itu bukan koneksi langsung ke Anthropic atau Moonshot dan tetap mengikuti provider OpenRouter.
+- **Google Gemini:** chat, katalog, health check, dan fallback Gemini langsung dihapus. Hanya Gemini Live voice/video memakai secret Worker terpisah `GEMINI_LIVE_API_KEY`; model Gemini melalui OpenRouter tetap berjalan sebagai rute OpenRouter. Ganti secret lama `GEMINI_API_KEY` sebelum deploy agar Gemini Live tetap tersedia.
 
 ---
 ## Pembaruan keamanan dan stabilitas di v3.6

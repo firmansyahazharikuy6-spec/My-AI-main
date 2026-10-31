@@ -1,12 +1,30 @@
-const DOCUMENT_PROVIDERS = new Set(["openrouter", "gemini", "groq", "nvidia"]);
+const DOCUMENT_PROVIDERS = new Set(["openrouter", "groq", "nvidia"]);
 const MAX_FALLBACK_ATTEMPTS = 4;
 const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_COOLDOWN_MS = 60_000;
+const OPENROUTER_GEMINI_IMAGE_ID = "google/gemini-2.5-flash-image";
 const providerFailures = new Map();
 const providerCircuitUntil = new Map();
 
 export function canonicalProvider(provider) {
   return String(provider || "").replace(/^gateway-/, "").toLowerCase();
+}
+
+export function imageTaskGroups(groups, fallbackGroup = null) {
+  const imageGroups = (Array.isArray(groups) ? groups : [])
+    .filter((group) => canonicalProvider(group.provider) === "openrouter")
+    .map((group) => ({
+      ...group,
+      models: (Array.isArray(group.models) ? group.models : [])
+        .filter((model) => model?.imageOnly === true && model.id === OPENROUTER_GEMINI_IMAGE_ID)
+        .map((model) => ({ ...model, provider: group.provider })),
+    }))
+    .filter((group) => group.models.length);
+  if (imageGroups.length || canonicalProvider(fallbackGroup?.provider) !== "openrouter") return imageGroups;
+  const fallbackModels = (Array.isArray(fallbackGroup.models) ? fallbackGroup.models : [])
+    .filter((model) => model?.imageOnly === true && model.id === OPENROUTER_GEMINI_IMAGE_ID)
+    .map((model) => ({ ...model, provider: fallbackGroup.provider }));
+  return fallbackModels.length ? [{ ...fallbackGroup, models: fallbackModels }] : [];
 }
 
 export function rankDocumentModels(groups, providerHealth = {}) {
@@ -20,10 +38,8 @@ export function rankDocumentModels(groups, providerHealth = {}) {
       const name = String(model.name || "");
       const priority = provider === "nvidia" ? 0
         : provider === "openrouter" && /(?:anthropic\/|claude)/i.test(`${id} ${name}`) ? 1
-          : provider === "gemini" && /pro/i.test(`${id} ${name}`) ? 2
-            : provider === "gemini" ? 3
-              : provider === "openrouter" ? 4
-                : provider === "groq" ? 5 : 6;
+          : provider === "openrouter" ? 2
+            : provider === "groq" ? 3 : 4;
       models.push({ ...model, provider: group.provider, priority });
     }
   }
@@ -94,7 +110,7 @@ export async function runProviderFallbacks(candidates, runModel, {
   let attempts = 0;
   for (const candidate of Array.isArray(candidates) ? candidates : []) {
     const provider = canonicalProvider(candidate?.provider);
-    if (!provider || attemptedProviders.has(provider) || isProviderCircuitOpen(provider, now())) continue;
+    if (!provider || provider === "gemini" || attemptedProviders.has(provider) || isProviderCircuitOpen(provider, now())) continue;
     attemptedProviders.add(provider);
     if (++attempts > maxAttempts) break;
     onAttempt(candidate, attempts);

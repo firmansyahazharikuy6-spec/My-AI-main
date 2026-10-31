@@ -5,8 +5,8 @@ const BRANDS = [
   [/claude|anthropic/, "claude-color"],
   [/nano-banana|google|gemini/, "gemini-color"],
   [/gemma/, "gemma-color"],
-  [/deepseek/, "deepseek-color"],
   [/qwen|qwq/, "qwen-color"],
+  [/deepseek/, "deepseek-color"],
   [/grok|x-ai\//, "grok"],
   [/\bgroq\b/, "groq"],
   [/kimi|moonshot/, "kimi-color"],
@@ -33,7 +33,7 @@ const BRANDS = [
   [/sakana/, "sakana-color"],
   [/upstage|solar/, "upstage-color"],
   [/arcee/, "arcee-color"],
-  [/aion-labs|aionlabs/, "aionlabs-color"],
+  [/aion[-\s]?labs/, "aionlabs-color"],
   [/meituan|longcat/, "longcat-color"],
   [/inception|mercury/, "inception"],
   [/fireworks/, "fireworks-color"],
@@ -47,12 +47,82 @@ const BRANDS = [
   [/openrouter/, "openrouter"],
 ];
 
+const MODEL_BRAND_NAMES = [
+  [/deep[-\s]?research/, "Deep Research"],
+  [/nvidia|nemotron/, "NVIDIA"],
+  [/claude|anthropic/, "Anthropic"],
+  [/gemini|gemma|google/, "Google"],
+  [/qwen|qwq/, "Qwen"],
+  [/gpt|openai|\bo[134](-|\s|$)/, "OpenAI"],
+  [/deepseek/, "DeepSeek"],
+  [/grok|x-ai/, "xAI"],
+  [/kimi|moonshot/, "Moonshot / Kimi"],
+  [/llama|meta[-/]/, "Meta"],
+  [/mistral|ministral|mixtral|codestral|devstral/, "Mistral"],
+  [/glm|z-ai|zhipu/, "Z.ai / GLM"],
+  [/minimax/, "MiniMax"],
+  [/cohere|command-/, "Cohere"],
+  [/perplexity|sonar/, "Perplexity"],
+  [/phi|microsoft/, "Microsoft"],
+  [/granite|ibm/, "IBM"],
+  [/nova|amazon/, "Amazon"],
+  [/allenai|olmo|ai2/, "AI2"],
+  [/liquid|lfm/, "Liquid"],
+  [/ernie|baidu/, "Baidu"],
+  [/hunyuan|tencent/, "Tencent"],
+  [/doubao|bytedance|seed-/, "ByteDance"],
+  [/stepfun|step-\d/, "StepFun"],
+  [/xiaomi|mimo/, "Xiaomi"],
+  [/sakana/, "Sakana AI"],
+  [/upstage|solar/, "Upstage"],
+  [/arcee/, "Arcee"],
+  [/hermes|nous/, "Nous Research"],
+  [/ai21|jamba/, "AI21"],
+  [/01-ai|yi-/, "01.AI"],
+  [/falcon|tii-org/, "TII"],
+];
+
 export function brandOf(text) {
   const t = text.toLowerCase();
   for (const [re, icon] of BRANDS) {
     if (re.test(t)) return { src: ICON_BASE + icon + ".svg", mono: !icon.endsWith("-color") };
   }
   return null;
+}
+
+export function modelBrandName(model, provider = model?.provider) {
+  const identity = `${model?.id || ""} ${model?.name || ""}`.toLowerCase();
+  const matchedBrand = MODEL_BRAND_NAMES.find(([pattern]) => pattern.test(identity))?.[1];
+  if (matchedBrand) return matchedBrand;
+  const normalizedProvider = String(provider || "")
+    .toLowerCase()
+    .replace(/^gateway-/, "")
+    .replace(/^server-/, "");
+  if (normalizedProvider === "openrouter" || normalizedProvider === "openrouter-image") {
+    const publisher = modelPublisherName(model);
+    return publisher.toLowerCase() === "openrouter" ? "OpenRouter" : publisher || "OpenRouter";
+  }
+  return "";
+}
+
+export function modelPublisherName(model) {
+  const id = typeof model?.id === "string" ? model.id.trim() : "";
+  const namespace = id.includes("/") ? id.split("/", 1)[0] : "";
+  if (!namespace) return "";
+  const knownNames = {
+    "01-ai": "01.AI",
+    "ai2": "AI2",
+    "meta-llama": "Meta",
+    "x-ai": "xAI",
+    "z-ai": "Z.ai",
+    "nousresearch": "Nous Research",
+  };
+  const normalized = namespace.toLowerCase();
+  if (knownNames[normalized]) return knownNames[normalized];
+  return namespace
+    .replace(/[._-]+/g, " ")
+    .trim()
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
 }
 
 const SIZE_TOKEN = /^(?:[ae]?\d+(?:\.\d+)?[bmt]|\d+e|\d+k)$/i;
@@ -76,7 +146,7 @@ export function prettify(id) {
 const NOISE = new Set(["instruct", "it", "chat", "hf", "bf16"]);
 
 // Memecah ID model menjadi "lini" (nama tanpa angka versi), versi, dan ukuran.
-// Contoh: "qwen/qwen3.8-27b" -> lini "qwen#", versi [3.8], ukuran "27b".
+// Contoh: "meta/llama-3.3-70b" -> lini "llama#", versi [3.3], ukuran "70b".
 function parse(id) {
   const parts = id.toLowerCase().split("/");
   const author = parts.length > 1 ? parts[0] : "";

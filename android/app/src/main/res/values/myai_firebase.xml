@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="firebase_api_key">AIzaSyBxenbvx__OOo5mbbROy8-1jEoLRqXaPSI</string>
+    <string name="firebase_app_id">1:550223008167:web:7b5603cdec64b80dc96682</string>
+    <string name="firebase_project_id">my-ai-69027</string>
+    <string name="firebase_storage_bucket">my-ai-69027.firebasestorage.app</string>
+    <string name="firebase_messaging_sender_id">550223008167</string>
+</resources>

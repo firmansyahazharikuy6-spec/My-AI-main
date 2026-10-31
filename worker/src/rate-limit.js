@@ -3,7 +3,6 @@ export const EMAIL_DAILY_LIMIT = 20;
 export const EMAIL_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 
 export const AI_ROUTE_LIMITS = Object.freeze({
-  chat: Object.freeze({ perMinute: 5, perDay: 100, label: "chat AI" }),
   "image-chat": Object.freeze({ perMinute: 5, perDay: 10, label: "pembuatan gambar melalui chat" }),
   "image-generate": Object.freeze({ perMinute: 5, perDay: 10, label: "pembuatan gambar" }),
   transcribe: Object.freeze({ perMinute: 5, perDay: 30, label: "transkripsi audio" }),
@@ -22,6 +21,25 @@ export const AI_ROUTE_LIMITS = Object.freeze({
   email: Object.freeze({ perMinute: 5, perDay: 20, label: "pengiriman email" }),
 });
 
+export function isMaintenanceAdmin(user, env) {
+  if (user?.email_verified !== true || typeof user.email !== "string") return false;
+  const email = user.email.trim().toLowerCase();
+  if (!email) return false;
+  return String(env?.AI_ADMIN_EMAILS || "")
+    .split(",")
+    .some((allowed) => allowed.trim().toLowerCase() === email);
+}
+
+export function outputTokenLimitForUser() {
+  return Number.MAX_SAFE_INTEGER;
+}
+
+export function dailyLimitForUser(user, env, route) {
+  const limits = AI_ROUTE_LIMITS[route];
+  if (!limits) return null;
+  return limits.perDay;
+}
+
 export async function enforceGuestRateLimit(request, env, deviceId, HttpError) {
   if (!env.AI_RATE_LIMITER) {
     throw new HttpError(503, "AI guest belum diaktifkan. Admin perlu deploy binding rate limit Worker.");
@@ -37,10 +55,12 @@ export async function enforceGuestRateLimit(request, env, deviceId, HttpError) {
 }
 
 export async function enforceAIRateLimit(user, env, route, HttpError) {
-  const limits = AI_ROUTE_LIMITS[route];
-  if (!limits) throw new HttpError(500, "Konfigurasi batas AI untuk route ini tidak tersedia.");
   const identity = typeof user?.sub === "string" ? user.sub : "";
   if (!identity) throw new HttpError(401, "Masuk dengan akun untuk menggunakan layanan AI.");
+  if (route === "chat") return;
+  const limits = AI_ROUTE_LIMITS[route];
+  if (!limits) throw new HttpError(500, "Konfigurasi batas AI untuk route ini tidak tersedia.");
+  const dailyLimit = dailyLimitForUser(user, env, route);
   if (!env.AI_RATE_LIMITER) {
     throw new HttpError(503, "Rate limit AI belum dikonfigurasi di Cloudflare Worker.");
   }
@@ -58,7 +78,7 @@ export async function enforceAIRateLimit(user, env, route, HttpError) {
     response = await stub.fetch("https://ai-daily-rate-limit.internal/reserve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ route, limit: limits.perDay }),
+      body: JSON.stringify({ route, limit: dailyLimit }),
     });
   } catch {
     throw new HttpError(503, "Batas harian AI tidak dapat diperiksa. Coba lagi nanti.");
@@ -139,17 +159,17 @@ export class AIRateLimitStore {
       return Response.json({ error: "Invalid request body" }, { status: 400 });
     }
     const limits = AI_ROUTE_LIMITS[body?.route];
-    if (!limits || body.limit !== limits.perDay) {
+    if (!limits || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > limits.perDay) {
       return Response.json({ error: "Invalid route or limit" }, { status: 400 });
     }
     const day = new Date().toISOString().slice(0, 10);
     const storageKey = `daily:${body.route}:${day}`;
     const result = await this.ctx.storage.transaction(async (txn) => {
       const used = await txn.get(storageKey) || 0;
-      if (used >= limits.perDay) return { allowed: false, remaining: 0 };
+      if (used >= body.limit) return { allowed: false, remaining: 0 };
       const next = used + 1;
       await txn.put(storageKey, next);
-      return { allowed: true, remaining: limits.perDay - next };
+      return { allowed: true, remaining: body.limit - next };
     });
     return Response.json(result);
   }

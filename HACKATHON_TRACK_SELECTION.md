@@ -63,11 +63,4 @@ MyAI also aligns with Personal AI through its user workspace, saved preferences,
 
 > **Selected track: Best Apps and Agents Track.** MyAI v5.47 is an all-in-one AI workspace combining chat, prompt assistance, media and document workflows, and live artifact previews. Its server-side gateway discovers models, applies provider- and capability-aware routing, streams responses, and can attempt eligible alternatives when a provider returns a quota or rate-limit error. The current release integrates NVIDIA NIM directly and prioritizes NVIDIA for supported workloads when an eligible model is available. The application currently runs on Cloudflare Pages and Workers. Nebius Token Factory routing and Nebius Serverless deployment are planned integrations, not features verified in the current release.
 
-## Submission accuracy checklist
-
-- [x] Primary track selected: **Best Apps and Agents Track**.
-- [x] MyAI's product focus is described as an AI workspace with model orchestration, not merely a gateway.
-- [x] Current direct NVIDIA NIM integration is distinguished from planned Nebius routing.
-- [x] Nemotron model families are described as proposed routes subject to catalog/account verification.
-- [x] Current Cloudflare deployment is distinguished from unverified Nebius Serverless hosting.
-- [x] Cross-track fit is included without overstating historical test results or privacy guarantees.
+#332543     y

@@ -1,0 +1,32 @@
+{
+  "id": "./",
+  "name": "MyAI",
+  "short_name": "MyAI",
+  "description": "Chat AI untuk bekerja, belajar, dan berkarya.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#11131b",
+  "background_color": "#11131b",
+  "icons": [
+    {
+      "src": "./icons/myai-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/myai-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/myai-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
-import { firebaseConfig } from "./config.js?v=20261020-v5.29";
+import { Capacitor } from "@capacitor/core";
+import { firebaseConfig } from "./config.js?v=20261029-v5.130";
 
 const FB_BASE = "https://www.gstatic.com/firebasejs/11.2.0";
 const LS_KEY = "myai_chats";
@@ -19,7 +20,7 @@ let nativeFirebaseAuth = null;
 let pendingGithubLink = null;
 
 function isNativeApp() {
-  return window.Capacitor?.isNativePlatform?.() === true;
+  return Capacitor.isNativePlatform();
 }
 
 export function consumeAuthError() {
@@ -143,8 +144,10 @@ export async function signIn({ allowRedirectFallback = true } = {}) {
       throw new Error("Login Google native belum siap. Tutup dan buka kembali aplikasi.");
     }
     const result = await nativeFirebaseAuth.signInWithGoogle({ skipNativeAuth: true });
-    const idToken = result.credential?.idToken;
-    if (!idToken) throw new Error("Login Google tidak mengembalikan token. Periksa konfigurasi Firebase native.");
+    const idToken = result.credential?.idToken || result.idToken;
+    if (!idToken) {
+      throw new Error("Login Google tidak mengembalikan token. Pastikan Firebase Android app sudah terdaftar dan provider Google aktif.");
+    }
     const credential = fb.GoogleAuthProvider.credential(idToken);
     return fb.signInWithCredential(auth, credential);
   }
@@ -173,15 +176,18 @@ async function ensureAuthReady() {
 
 export async function signInWithGithub() {
   await ensureAuthReady();
+  const native = isNativeApp();
+  const provider = native ? null : new fb.GithubAuthProvider();
   try {
-    if (isNativeApp()) {
+    if (native) {
       if (!nativeFirebaseAuth) throw new Error("Login GitHub native belum siap. Tutup dan buka kembali aplikasi.");
       const result = await nativeFirebaseAuth.signInWithGithub({ skipNativeAuth: true });
-      const accessToken = result.credential?.accessToken;
-      if (!accessToken) throw new Error("Login GitHub tidak mengembalikan token. Periksa konfigurasi Firebase native.");
+      const accessToken = result.credential?.accessToken || result.accessToken;
+      if (!accessToken) {
+        throw new Error("Login GitHub tidak mengembalikan token. Pastikan Github provider di Firebase Console aktif dan app Android sudah di-register.");
+      }
       return await fb.signInWithCredential(auth, fb.GithubAuthProvider.credential(accessToken));
     }
-    const provider = new fb.GithubAuthProvider();
     return await fb.signInWithPopup(auth, provider);
   } catch (error) {
     if (error?.code === "auth/account-exists-with-different-credential") {
@@ -189,7 +195,7 @@ export async function signInWithGithub() {
       const email = error.customData?.email || error.email || "";
       if (credential && email) pendingGithubLink = { credential, email };
     }
-    if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(error?.code)) {
+    if (!native && ["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(error?.code)) {
       sessionStorage.setItem(PENDING_AUTH_PROVIDER_KEY, "github");
       try {
         await fb.signInWithRedirect(auth, provider);
@@ -210,7 +216,7 @@ export async function signInWithApple() {
   if (!fb || !auth) {
     throw new Error("Firebase Auth belum siap. Muat ulang aplikasi lalu coba lagi.");
   }
-  if (!isNativeApp() || window.Capacitor?.getPlatform?.() !== "ios" || !nativeFirebaseAuth) {
+  if (!isNativeApp() || Capacitor.getPlatform() !== "ios" || !nativeFirebaseAuth) {
     throw new Error("Login Apple hanya tersedia di aplikasi iOS.");
   }
   const result = await nativeFirebaseAuth.signInWithApple({ skipNativeAuth: true });

@@ -184,9 +184,9 @@ await feature("F7", "Word ke PDF dan Excel menghasilkan outline untuk Canva Conn
 
 await feature("F8", "fallback berpindah provider setelah skema gagal dan lolos validasi", async () => {
   resetProviderCircuits();
-  const invalid = '{"type":"doc","assigned_model":"gemini-vision","summary":"","data":{"title":"valid","content_markdown":"isi"}}';
-  const validDoc = '{"type":"doc","assigned_model":"gemini-vision","summary":"Dokumen siap","data":{"title":"Rencana","content_markdown":"Isi valid."}}';
-  const validFallback = '{"type":"text","assigned_model":"gemini-vision","summary":"Jawaban cadangan","data":{"reply_markdown":"fallback"}}';
+  const invalid = '{"type":"doc","assigned_model":"groq-fast","summary":"","data":{"title":"valid","content_markdown":"isi"}}';
+  const validDoc = '{"type":"doc","assigned_model":"groq-fast","summary":"Dokumen siap","data":{"title":"Rencana","content_markdown":"Isi valid."}}';
+  const validFallback = '{"type":"text","assigned_model":"groq-fast","summary":"Jawaban cadangan","data":{"reply_markdown":"fallback"}}';
   const runWithOneRepair = async (candidate, attempted, repairSucceeds) => {
     attempted.push(candidate.id);
     try {
@@ -201,24 +201,24 @@ await feature("F8", "fallback berpindah provider setelah skema gagal dan lolos v
 
   const repairedAttempts = [];
   const repairedPrimary = await runProviderFallbacks([
-    { provider: "gemini", id: "gemini-primary" },
-    { provider: "groq", id: "groq-fallback" },
+    { provider: "groq", id: "groq-primary" },
+    { provider: "nvidia", id: "nvidia-fallback" },
   ], async (candidate) => runWithOneRepair(candidate, repairedAttempts, true));
-  assert.equal(repairedPrimary.provider, "gemini");
-  assert.deepEqual(repairedAttempts, ["gemini-primary", "gemini-primary:repair"]);
+  assert.equal(repairedPrimary.provider, "groq");
+  assert.deepEqual(repairedAttempts, ["groq-primary", "groq-primary:repair"]);
 
   resetProviderCircuits();
   const fallbackAttempts = [];
   const selectedFallback = await runProviderFallbacks([
-    { provider: "gemini", id: "gemini-primary" },
-    { provider: "groq", id: "groq-fallback" },
+    { provider: "groq", id: "groq-primary" },
+    { provider: "nvidia", id: "nvidia-fallback" },
   ], async (candidate) => {
-    if (candidate.provider === "gemini") return runWithOneRepair(candidate, fallbackAttempts, false);
+    if (candidate.provider === "groq") return runWithOneRepair(candidate, fallbackAttempts, false);
     fallbackAttempts.push(candidate.id);
     assert.ok(parseStructuredResponse(validFallback));
   });
-  assert.equal(selectedFallback.provider, "groq");
-  assert.deepEqual(fallbackAttempts, ["gemini-primary", "gemini-primary:repair", "groq-fallback"]);
+  assert.equal(selectedFallback.provider, "nvidia");
+  assert.deepEqual(fallbackAttempts, ["groq-primary", "groq-primary:repair", "nvidia-fallback"]);
 });
 
 const failures = results.filter((result) => result.status !== "LULUS");

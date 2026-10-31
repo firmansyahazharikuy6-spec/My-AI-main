@@ -65,7 +65,7 @@ export function saveActiveTier(tier) {
 }
 
 export function isTierAvailable(modelTier, activeTier = getActiveTier()) {
-  const modelRank = TIER_ORDER.indexOf(modelTier);
-  const activeRank = TIER_ORDER.indexOf(activeTier);
+  const modelRank = TIER_ORDER.indexOf(String(modelTier || "").toLowerCase());
+  const activeRank = TIER_ORDER.indexOf(String(activeTier || "").toLowerCase());
   return modelRank >= 0 && activeRank >= 0 && modelRank <= activeRank;
 }

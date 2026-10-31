@@ -1,0 +1,260 @@
+/* ============================================================
+   Apple Glass 3D upgrade — frosted surfaces, depth & motion
+   ============================================================ */
+
+:root[data-theme="light"] {
+  --panel: rgba(255, 253, 249, .72);
+  --panel-2: rgba(246, 240, 230, .56);
+  --panel-3: rgba(238, 229, 216, .44);
+  --border: rgba(145, 111, 63, .14);
+  --border-strong: rgba(116, 74, 20, .26);
+  --sidebar: rgba(243, 238, 229, .62);
+  --glass-strong: rgba(255, 253, 249, .84);
+  --glass-border: rgba(255, 255, 255, .55);
+  --glass-highlight: rgba(255, 255, 255, .9);
+  --glass-shadow: 0 1px 2px rgba(62, 43, 19, .05), 0 14px 34px rgba(62, 43, 19, .12), inset 0 1px 0 rgba(255, 255, 255, .88);
+  --shadow-menu: 0 1px 2px rgba(62, 43, 19, .06), 0 22px 54px rgba(62, 43, 19, .16), inset 0 1px 0 rgba(255, 255, 255, .9);
+  --shadow-composer: 0 1px 2px rgba(62, 43, 19, .05), 0 18px 44px rgba(62, 43, 19, .14), inset 0 1px 0 rgba(255, 255, 255, .85);
+  --ease-spring: cubic-bezier(.22, 1, .36, 1);
+}
+
+:root[data-theme="dark"] {
+  --panel: rgba(36, 32, 25, .6);
+  --panel-2: rgba(243, 236, 223, .07);
+  --panel-3: rgba(243, 236, 223, .11);
+  --border: rgba(223, 185, 111, .1);
+  --border-strong: rgba(223, 185, 111, .2);
+  --sidebar: rgba(29, 25, 20, .66);
+  --glass-strong: rgba(36, 32, 25, .84);
+  --glass-border: rgba(223, 185, 111, .12);
+  --glass-highlight: rgba(255, 248, 232, .14);
+  --glass-shadow: 0 1px 2px rgba(0, 0, 0, .24), 0 14px 34px rgba(0, 0, 0, .32), inset 0 1px 0 rgba(255, 248, 232, .1);
+  --shadow-menu: 0 1px 2px rgba(0, 0, 0, .3), 0 22px 54px rgba(0, 0, 0, .46), inset 0 1px 0 rgba(255, 248, 232, .1);
+  --shadow-composer: 0 1px 2px rgba(0, 0, 0, .26), 0 18px 44px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 248, 232, .08);
+  --ease-spring: cubic-bezier(.22, 1, .36, 1);
+}
+
+/* Frosted sheets: big surfaces get stronger blur */
+.sidebar,
+.topbar,
+.composer,
+dialog,
+.model-menu,
+.language-menu,
+.task-mode-menu,
+.attach-menu,
+.usage-dashboard-dialog {
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  backdrop-filter: blur(28px) saturate(170%);
+}
+
+/* Solid controls become glass controls */
+.msg.user .body,
+.btn,
+.icon-btn,
+.theme-toggle,
+.language-picker,
+.attach-btn,
+.copy-btn,
+.scroll-down,
+.sidebar-action.primary,
+.sidebar-user-card,
+.sidebar-settings,
+.sidebar-tier-badge,
+.chat-item.active,
+.chat-item:hover,
+.prompt-helper-btn,
+.prompt-suggestion-btn,
+.task-mode-btn,
+#modelBtn,
+#attachBtn,
+#sendBtn,
+#micBtn,
+.integration-chip,
+.welcome .integration-chip,
+.quick-create-btn,
+.tier-card,
+.landing-card,
+.drop-card,
+.tier-model,
+.persona-option,
+.provider-health-card {
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  backdrop-filter: blur(14px) saturate(160%);
+}
+
+.msg.user .body {
+  background: color-mix(in srgb, var(--panel-2) 82%, transparent);
+  border: 1px solid var(--glass-border);
+  border-bottom-color: color-mix(in srgb, var(--glass-border) 60%, transparent);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, .05), inset 0 1px 0 var(--glass-highlight);
+}
+
+.btn {
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  border-color: var(--glass-border);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .05), inset 0 1px 0 var(--glass-highlight);
+  transition: transform .22s var(--ease-spring), box-shadow .22s var(--ease-spring), border-color .22s var(--ease-spring), background .22s var(--ease-spring);
+}
+.btn:hover { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(15, 23, 42, .09), inset 0 1px 0 var(--glass-highlight); }
+.btn:active { transform: translateY(0) scale(.98); }
+.btn.primary {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--text) 92%, #fff) 0%, var(--text) 55%);
+  border-color: color-mix(in srgb, var(--text) 80%, var(--border-strong));
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .14), inset 0 1px 0 rgba(255, 255, 255, .22);
+}
+.btn.primary:hover { box-shadow: 0 8px 20px rgba(15, 23, 42, .2), inset 0 1px 0 rgba(255, 255, 255, .26); }
+
+/* 3D lift for cards & chips */
+.welcome .integration-chip,
+.quick-create-btn,
+.tier-card,
+.landing-card,
+.persona-option,
+.provider-health-card,
+.sidebar-user-card,
+.sidebar-settings,
+.sidebar-tier-badge {
+  transition: transform .28s var(--ease-spring), box-shadow .28s var(--ease-spring), border-color .28s var(--ease-spring);
+  will-change: transform;
+}
+.welcome .integration-chip:hover,
+.quick-create-btn:hover,
+.tier-card:hover,
+.landing-card:hover,
+.persona-option:hover,
+.provider-health-card:hover,
+.sidebar-user-card:hover,
+.sidebar-settings:hover,
+.sidebar-tier-badge:hover {
+  transform: perspective(720px) translateY(-3px) rotateX(1.6deg);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--glass-border));
+  box-shadow: 0 2px 4px rgba(15, 23, 42, .06), 0 18px 38px rgba(15, 23, 42, .12), inset 0 1px 0 var(--glass-highlight);
+}
+.welcome .integration-chip:active,
+.quick-create-btn:active,
+.tier-card:active,
+.landing-card:active {
+  transform: perspective(720px) translateY(-1px) scale(.985);
+}
+
+/* Floating brand mark + logo */
+.brand-logo {
+  animation: apple-float 6s ease-in-out infinite;
+  box-shadow: 0 0 0 1px rgba(212, 175, 55, .22), 0 6px 22px rgba(212, 175, 55, .22), 0 18px 44px rgba(212, 175, 55, .1);
+}
+.welcome-visual .welcome-logo,
+.welcome .welcome-logo {
+  animation: apple-float 7s ease-in-out infinite;
+  filter: drop-shadow(0 12px 26px rgba(62, 43, 19, .2));
+}
+@keyframes apple-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-4px) rotate(1.2deg); }
+}
+
+/* Deeper, cleaner sheets */
+dialog {
+  border-radius: 24px;
+  box-shadow: var(--shadow-menu);
+}
+.model-menu,
+.attach-menu,
+.language-menu,
+.task-mode-menu {
+  border-radius: 18px;
+  box-shadow: var(--shadow-menu);
+}
+.toast {
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .08), 0 12px 30px rgba(15, 23, 42, .14), inset 0 1px 0 var(--glass-highlight);
+}
+
+/* Composer: softer, deeper, Apple-like focus glow */
+.composer {
+  border-radius: 24px;
+  border-color: var(--glass-border);
+  border-top-color: var(--glass-highlight);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  box-shadow: var(--shadow-composer);
+  transition: border-color .25s var(--ease-spring), box-shadow .25s var(--ease-spring), transform .25s var(--ease-spring);
+}
+.composer:focus-within {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--glass-border));
+  box-shadow: 0 1px 2px rgba(62, 43, 19, .06), 0 22px 52px rgba(62, 43, 19, .18), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), inset 0 1px 0 var(--glass-highlight);
+}
+
+/* Sidebar finesse */
+.sidebar { border-right-color: var(--glass-border); }
+.sidebar-action {
+  border-radius: 12px;
+  transition: background .2s var(--ease-spring), transform .2s var(--ease-spring);
+}
+.sidebar-action:hover { transform: translateX(2px); }
+.chat-item { border-radius: 10px; transition: background .18s var(--ease-spring), transform .18s var(--ease-spring); }
+.chat-item:hover { transform: translateX(2px); }
+
+/* Enter animation: cards rise into place */
+.welcome .integration-chip,
+.welcome .quick-create-btn {
+  animation: glass-rise .5s var(--ease-spring) backwards;
+}
+.welcome .integration-chip:nth-child(2),
+.welcome .quick-create-btn:nth-child(2) { animation-delay: .05s; }
+.welcome .integration-chip:nth-child(3),
+.welcome .quick-create-btn:nth-child(3) { animation-delay: .1s; }
+.welcome .integration-chip:nth-child(4),
+.welcome .quick-create-btn:nth-child(4) { animation-delay: .15s; }
+@keyframes glass-rise {
+  from { opacity: 0; transform: translateY(14px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Cleaner ambient background in light mode */
+:root[data-theme="light"] .app::before { opacity: .26; }
+:root[data-theme="light"] body::before { opacity: .5; }
+
+/* Fallback when backdrop-filter is unsupported */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-theme="light"] {
+    --panel: #fffdf9;
+    --panel-2: #f6f0e6;
+    --sidebar: #f3eee5;
+    --glass-strong: #fffdf9;
+  }
+  :root[data-theme="dark"] {
+    --panel: #242019;
+    --glass-strong: #242019;
+  }
+}
+
+/* Mobile: lighter blur for battery & smoothness */
+@media (max-width: 600px) {
+  .sidebar,
+  .topbar,
+  .composer,
+  dialog,
+  .model-menu,
+  .attach-menu {
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    backdrop-filter: blur(16px) saturate(150%);
+  }
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .brand-logo,
+  .welcome-visual .welcome-logo,
+  .welcome .welcome-logo { animation: none; }
+  .welcome .integration-chip,
+  .welcome .quick-create-btn { animation: none; }
+  .welcome .integration-chip,
+  .quick-create-btn,
+  .tier-card,
+  .landing-card,
+  .btn,
+  .composer,
+  .sidebar-action,
+  .chat-item { transition-duration: .01ms; }
+}

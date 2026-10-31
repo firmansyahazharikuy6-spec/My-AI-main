@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   boostImagePromptQuality,
   buildFallbackImagePromptPlan,
+  buildImagePromptEnhanceSystemPrompt,
   cleanImageGenerationPrompt,
+  isImageEditPrompt,
   validateImagePromptPlan,
 } from "./image-prompts.js";
 import { streamChat } from "./providers.js";
@@ -12,6 +14,20 @@ test("image prompt cleanup removes Indonesian and English generation commands", 
   assert.equal(cleanImageGenerationPrompt("Buatkan gambar sampel: pegunungan saat matahari terbit."), "pegunungan saat matahari terbit");
   assert.equal(cleanImageGenerationPrompt("Generate image: a quiet lake at dawn"), "a quiet lake at dawn");
   assert.equal(cleanImageGenerationPrompt("kota yang indah dengan tema masa depan"), "kota yang indah dengan tema masa depan");
+});
+
+test("photo-retouch requests with a supplied image are classified as edits, not new image prompts", () => {
+  const prompt = `Edit foto ini, bukan buat gambar baru. Pertahankan wajah, identitas, pose,
+proporsi tubuh, pakaian, dan latar belakang persis seperti aslinya.
+Lakukan hanya penyempurnaan halus:
+- haluskan kulit secara natural dengan tekstur pori tetap terlihat
+- rapikan noda kecil dan bayangan di bawah mata secara ringan
+- perbaiki pencahayaan dan koreksi warna agar lebih hangat dan cerah
+- pertajam detail wajah dan rambut sedikit
+Hasil harus terlihat seperti foto asli yang diambil dengan kamera bagus,
+bukan hasil AI atau filter berlebihan. Jangan ubah bentuk wajah atau tubuh.`;
+  assert.equal(isImageEditPrompt(prompt), true);
+  assert.equal(isImageEditPrompt("Buat gambar baru seekor kucing di taman."), false);
 });
 
 test("image prompt quality boost is added once", () => {
@@ -29,30 +45,7 @@ test("image prompt quality boost is added once", () => {
   );
 });
 
-test("Pollinations image stream cleans the request and builds an HD URL without fetching image bytes", async () => {
-  const chunks = [];
-  for await (const chunk of streamChat("pollinations", "flux", [
-    { role: "user", content: "Buatkan gambar sampel: pegunungan saat matahari terbit." },
-  ], { imageGeneration: true }, new AbortController().signal)) {
-    chunks.push(chunk);
-  }
-  const imageUrl = chunks.find((chunk) => typeof chunk.image === "string")?.image;
-  assert.ok(imageUrl);
-  const url = new URL(imageUrl);
-  assert.equal(url.hostname, "image.pollinations.ai");
-  assert.equal(url.searchParams.get("width"), "1280");
-  assert.equal(url.searchParams.get("height"), "720");
-  assert.equal(url.searchParams.get("nologo"), "true");
-  assert.equal(url.searchParams.get("enhance"), "false");
-  assert.match(url.searchParams.get("seed"), /^\d+$/);
-  assert.match(decodeURIComponent(url.pathname), /^\/prompt\/A quiet mountain landscape at sunrise/);
-  const metadata = chunks.find((chunk) => chunk.imageMetadata)?.imageMetadata;
-  assert.equal(metadata.provider, "pollinations");
-  assert.equal(metadata.modelLabel, "Flux (Pollinations)");
-  assert.match(metadata.prompt, /mountain landscape/i);
-});
-
-test("image prompt fallback preserves concrete intent across ten Indonesian request shapes (MOCK)", async () => {
+test("image prompt fallback preserves concrete intent across ten Indonesian request shapes (MOCK)", () => {
   const cases = [
     ["tolong buatka aku sebuah gambar tentang kemerdekaan indonesia", ["indonesian independence", "red-and-white"]],
     ["gambar kucing oren lagi tidur di jendela hujan", ["orange tabby cat", "rain"]],
@@ -76,16 +69,6 @@ test("image prompt fallback preserves concrete intent across ten Indonesian requ
     }
     assert.deepEqual(validateImagePromptPlan(plan, cleaned), plan);
     assert.ok(plan.prompt.length <= 2400, `fallback exceeded output limit for: ${rawPrompt}`);
-    const chunks = [];
-    for await (const chunk of streamChat("pollinations", "flux", [{ role: "user", content: rawPrompt }], {
-      imageGeneration: true,
-      imagePromptPlan: plan,
-    }, new AbortController().signal)) chunks.push(chunk);
-    const image = chunks.find((chunk) => chunk.image);
-    assert.ok(image, `no generated image URL for: ${rawPrompt}`);
-    assert.equal(image.imageMetadata.provider, "pollinations");
-    assert.equal(image.imageMetadata.model, "flux");
-    assert.equal(image.imageMetadata.modelLabel, "Flux (Pollinations)");
   }
 });
 
@@ -119,69 +102,80 @@ test("invalid image prompt plans fall back locally without losing known subject 
   assert.match(plan.prompt, /red-and-white/i);
 });
 
-test("image result label metadata reflects the selected Pollinations model (MOCK; no provider request)", async () => {
-  const chunks = [];
-  const plan = buildFallbackImagePromptPlan("tolong buatka aku gambar tentang kemerdekaan indonesia");
-  for await (const chunk of streamChat("pollinations", "flux", [
-    { role: "user", content: "tolong buatka aku gambar tentang kemerdekaan indonesia" },
-  ], { imageGeneration: true, imagePromptPlan: plan, imageFallbackReason: "Gemini Image tidak tersedia (HTTP 429)." }, new AbortController().signal)) {
-    chunks.push(chunk);
+test("image requests cannot use Pollinations or the chat-provider stream", async () => {
+  for (const [provider, options] of [
+    ["pollinations", {}],
+    ["gemini", { imageGeneration: true }],
+    ["groq", { generateImage: true }],
+  ]) {
+    await assert.rejects(async () => {
+      for await (const _chunk of streamChat(provider, "test-model", [
+        { role: "user", content: "Create a landscape." },
+      ], options, new AbortController().signal)) {}
+    }, /hanya tersedia melalui Gemini Image/i);
   }
-  const imageChunk = chunks.find((chunk) => chunk.image);
-  assert.ok(imageChunk);
-  const url = new URL(imageChunk.image);
-  assert.equal(url.searchParams.get("model"), "flux");
-  assert.equal(imageChunk.imageMetadata.provider, "pollinations");
-  assert.equal(imageChunk.imageMetadata.modelLabel, "Flux (Pollinations)");
-  assert.match(imageChunk.imageMetadata.fallbackReason, /429/);
-  assert.match(decodeURIComponent(url.pathname), /Indonesian Independence Day/);
 });
 
-test("image fallback resolution pins Pollinations to 768 square (MOCK)", async () => {
-  const chunks = [];
-  for await (const chunk of streamChat("pollinations", "flux", [
-    { role: "user", content: "Create a quiet forest scene." },
-  ], {
-    imageGeneration: true,
-    imageFallbackReason: "Gemini returned HTTP 500.",
-    imageFallbackResolution: "768x768",
-  }, new AbortController().signal)) chunks.push(chunk);
-  const url = new URL(chunks.find((chunk) => chunk.image).image);
-  assert.equal(url.searchParams.get("width"), "768");
-  assert.equal(url.searchParams.get("height"), "768");
+test("image prompt enhancer system prompt demands maximum detail and full budget", () => {
+  const system = buildImagePromptEnhanceSystemPrompt();
+  assert.ok(system.length > 800);
+  assert.ok(system.includes("2,400"));
+  assert.ok(system.includes("1,000"));
+  assert.match(system, /never shorten/i);
+  assert.match(system, /requiredVisualAnchor/);
+  assert.match(system, /assumptions/i);
+  assert.match(system, /16:9/i);
+  assert.match(system, /negative under 800/i);
+  assert.match(system, /Do not ask questions/i);
 });
 
-test("Pollinations URL preserves reserved prompt characters without changing query parameters (MOCK)", async () => {
-  const rawPrompt = "draw a robot & a cat? beside a 100% moon";
-  const plan = buildFallbackImagePromptPlan(rawPrompt);
-  let imageChunk;
-  for await (const chunk of streamChat("pollinations", "flux", [{ role: "user", content: rawPrompt }], {
-    imageGeneration: true,
-    imagePromptPlan: plan,
-  }, new AbortController().signal)) {
-    if (chunk.image) imageChunk = chunk;
-  }
-  const url = new URL(imageChunk.image);
-  assert.equal(decodeURIComponent(url.pathname.slice("/prompt/".length)), imageChunk.imageMetadata.prompt);
-  assert.equal(url.searchParams.get("width"), "1024");
-  assert.equal(url.searchParams.get("height"), "1024");
-  assert.equal(url.searchParams.get("fake"), null);
-  assert.match(url.pathname, /%26/);
-  assert.match(url.pathname, /%3F/);
+test("validation rejects plans that drop a generic requested subject", () => {
+  const plan = validateImagePromptPlan({
+    prompt: "A colossal fire-breathing dragon soaring above a burning medieval castle, dark storm clouds gathering behind it, embers and ash swirling through the air, the castle towers silhouetted against the inferno, glowing orange light from the flames reflecting on the dragon's dark scales, terrified villagers fleeing along a stone bridge in the foreground, dramatic low-angle composition, volumetric smoke rolling across the courtyard, sparks rising into the night sky, deep shadows and high contrast, rich crimson and amber palette with deep black shadows, ultra-detailed individual scales and leathery wings, cinematic epic fantasy digital painting, sharp focus on the dragon's head, atmospheric haze, wisps of smoke curling around the battlements, molten embers trailing from the dragon's jaws, silhouettes of ravens scattering into the night, the fire glow painting the undersides of the clouds, distant mountain peaks barely visible beyond the castle walls, no text.",
+    negative: "",
+    aspect: "16:9",
+    style: "Epic digital painting",
+    assumptions: "Saya mengubah subjek menjadi naga.",
+  }, "gambar robot raksasa di tengah kota");
+  assert.match(plan.prompt, /robot/i);
+  assert.doesNotMatch(plan.prompt, /dragon/i);
 });
 
-test("image fallback uses the requested 768 by 768 Pollinations resolution (MOCK)", async () => {
-  let imageChunk;
-  for await (const chunk of streamChat("pollinations", "flux", [
-    { role: "user", content: "gambar ilustrasi sederhana" },
-  ], {
-    imageGeneration: true,
-    imageFallbackResolution: "768x768",
-    imagePromptPlan: buildFallbackImagePromptPlan("gambar ilustrasi sederhana"),
-  }, new AbortController().signal)) {
-    if (chunk.image) imageChunk = chunk;
-  }
-  const url = new URL(imageChunk.image);
-  assert.equal(url.searchParams.get("width"), "768");
-  assert.equal(url.searchParams.get("height"), "768");
+test("validation accepts a detailed plan that keeps the subject in another language", () => {
+  const prompt = "A vast field of golden sunflowers stretching to the horizon under a clear blue summer sky, hundreds of large blooms with dark brown centers facing the sun, a gentle breeze bending the green stems and leaves, a rustic wooden fence and a small farmhouse visible in the distance, warm golden afternoon sunlight streaming from the upper left with soft long shadows across the field, bees hovering between the flower heads, fine dew drops on the petals, vibrant yellow and green palette with blue sky accents, wide landscape composition with a low horizon line, shallow depth of field keeping the foreground blooms razor sharp, photorealistic photography style with high dynamic range, rows of flowers receding into the distance, scattered white clouds drifting across the sky, butterflies resting on the tallest blooms, the warm glow of late afternoon on every petal, a dirt path winding between the rows, soft atmospheric haze near the horizon, no text.";
+  const plan = validateImagePromptPlan({
+    prompt,
+    negative: "text, logos",
+    aspect: "16:9",
+    style: "Photorealistic",
+    assumptions: "Saya menafsirkan ladang sebagai hamparan bunga matahari.",
+  }, "gambar bunga matahari di ladang");
+  assert.equal(plan.prompt, prompt);
+  assert.match(plan.prompt, /sunflowers/i);
+  assert.equal(plan.aspect, "16:9");
+});
+
+test("validation accepts a detailed plan for a known scene that keeps its anchors", () => {
+  const prompt = "A fluffy orange tabby cat with bright green eyes sitting upright on a wooden windowsill, soft raindrops streaking down the window glass behind it, a cozy warm interior with a knitted blanket and a steaming cup visible in the foreground, cool blue rainy daylight filtering through the glass and contrasting with the warm amber indoor light, the cat's fur rendered strand by strand with detailed whiskers and a gently curled tail, intimate close composition with shallow depth of field, soft storybook illustration style with gentle shading, no text.";
+  const plan = validateImagePromptPlan({
+    prompt,
+    negative: "",
+    aspect: "1:1",
+    style: "Storybook illustration",
+    assumptions: "Saya mempertahankan kucing sebagai subjek utama.",
+  }, "kucing");
+  assert.equal(plan.prompt, prompt);
+  assert.match(plan.prompt, /tabby cat/i);
+});
+
+test("validation rejects plans shorter than the deterministic fallback", () => {
+  const plan = validateImagePromptPlan({
+    prompt: "A cat.",
+    negative: "",
+    aspect: "1:1",
+    style: "minimal",
+    assumptions: "",
+  }, "kucing");
+  assert.match(plan.prompt, /clearly visible cat/i);
+  assert.ok(plan.prompt.length > 150);
 });

@@ -10,7 +10,9 @@ EMAIL_RECIPIENT_ALLOWED_DOMAINS = ""
 CANVA_BRAND_TEMPLATE_ID = "OC-AaFxcyrOgfCY"
 CANVA_REDIRECT_URI = "https://myai-v3-free-api.firmansyahazharikuy6.workers.dev/canva/oauth/callback"
 MONID_MAX_RUN_COST = "0"
-TURNSTILE_SITE_KEY = ""
+TURNSTILE_SITE_KEY = "0x4AAAAAAFmGQdqw0sFlmDuU"
+IMAGE_EDIT_USER_DAILY_LIMIT = "5"
+IMAGE_EDIT_SHARED_DAILY_LIMIT = "4"
 
 [[kv_namespaces]]
 binding = "CANVA_TOKEN_STORE"
@@ -36,6 +38,13 @@ class_name = "EmailActionStore"
 name = "AI_DAILY_RATE_LIMIT_STORE"
 class_name = "AIRateLimitStore"
 
+[[durable_objects.bindings]]
+name = "IMAGE_EDIT_QUEUE"
+class_name = "ImageEditQueue"
+
+[triggers]
+crons = ["* * * * *"]
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GuestTrialCounter"]
@@ -47,3 +56,7 @@ new_sqlite_classes = ["EmailActionStore"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["AIRateLimitStore"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["ImageEditQueue"]

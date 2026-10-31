@@ -14,19 +14,19 @@ Chat records are kept in browser storage and, when signed in, are synchronized t
 
 ### Files and images
 
-Files are selected and parsed in the browser. If the user submits a prompt that uses extracted file text or image content, that content can be sent to the MyAI Worker and forwarded to the selected AI provider. The original uploaded file bytes are not included in durable chat records by the current client persistence code, but attachment names/details may be retained as chat metadata. Image generation also sends its prompt and options to the Worker and relevant image provider.
+Files are selected and parsed in the browser. If the user submits a prompt that uses extracted file text or image content, that content can be sent to the MyAI Worker and forwarded to the selected AI provider. The original uploaded file bytes are not included in durable chat records by the current client persistence code, but attachment names/details may be retained as chat metadata. Image generation and editing send the prompt and, for edits, a source-image reference to the Worker, which sends them to Google Gemini Image through OpenRouter.
 
 ### Audio and video
 
 - For transcription, the selected audio file is sent through the Worker to Groq's transcription endpoint. The resulting text may be added to the conversation and saved with that chat.
-- Gemini Live uses a short-lived token created through the Worker, followed by a browser-to-Google WebSocket connection. Microphone audio is streamed to Gemini Live; when video mode is enabled, camera frames are also sent during the session.
+- Gemini Live uses a short-lived token created through the Worker, followed by a browser-to-Google WebSocket connection. Microphone audio is streamed to Gemini Live; when video mode is enabled, camera frames are also sent during the session. Only this Live feature uses the separate `GEMINI_LIVE_API_KEY` Worker secret; direct Gemini chat and model discovery are not available.
 - The app does not put raw microphone/video stream bytes into durable chat records. This does **not** establish what Google or another provider may retain or process under its own terms.
 
 ### AI provider requests
 
-When a user submits an AI request, the Worker may send the prompt, relevant conversation context, instructions, extracted file content, and images to the provider/model selected in the app. Supported direct chat providers visible in the code are Google Gemini, Groq, OpenRouter, and NVIDIA NIM. Provider fallback may occur under the conditions described in [architecture](./ARCHITECTURE.md); if it does, the actual provider/model is identified in the response. Provider terms and privacy policies govern the provider's handling of data after receipt.
+When a user submits an AI request, the Worker may send the prompt, relevant conversation context, instructions, extracted file content, and images to the provider/model selected in the app. Supported chat providers include Claude, Groq, OpenRouter, Kimi/Moonshot, and NVIDIA NIM. Provider fallback may occur under the conditions described in [architecture](./ARCHITECTURE.md); if it does, the actual provider/model is identified in the response. Provider terms and privacy policies govern the provider's handling of data after receipt.
 
-Other optional integrations may process data when used: Turnstile/Cloudflare for guest verification and delivery; Monid or Explorium for data-tool requests; Canva for presentation export; Resend for email actions; and Pollinations for image generation. Whether a particular service is enabled depends on deployment configuration.
+Other optional integrations may process data when used: Turnstile/Cloudflare for guest verification and delivery; Monid or Explorium for data-tool requests; Canva for presentation export; Resend for email actions; and OpenRouter, using the `google/gemini-2.5-flash-image` model, for image generation and editing. Whether a particular service is enabled depends on deployment configuration. OpenRouter and its selected upstream provider terms apply after image data is received.
 
 ### Operational and anti-abuse data
 
@@ -47,7 +47,7 @@ Users choose when to submit prompts, attach files, enable microphone/camera acce
 
 1. Who is the legal data controller/operator, where is it established, and what contact address should users use for privacy requests?
 2. Which Firebase, Cloudflare, and AI-provider regions, subprocessors, retention periods, training/abuse-review practices, and deletion controls apply to the deployed accounts and selected models?
-3. What request/diagnostic data is retained in Cloudflare, Firebase, provider, Resend, Canva, Monid, Explorium, and Pollinations logs, and for how long?
+3. What request/diagnostic data is retained in Cloudflare, Firebase, provider, Resend, Canva, Monid, Explorium, and OpenRouter/upstream provider logs, and for how long?
 4. What is the process and timeline for deleting an account, its Firestore data, local data, and data already sent to third-party providers?
 5. Which legal bases, consent requirements, international transfer disclosures, age limits, and jurisdiction-specific notices apply?
 6. Are analytics, cookies, or other browser identifiers enabled in the deployed environment beyond the local storage items described above?

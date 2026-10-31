@@ -156,8 +156,11 @@ test("ordinary chat is not parsed as an artifact and malformed presentations get
 test("explicit image creation prompts are detected without mistaking analysis for generation", () => {
   for (const prompt of [
     "Buatkan gambar animasi tentang pegunungan.",
+    "Tolong buat sebuah gambar seekor kucing di taman.",
     "Generate image of a mountain at sunrise.",
+    "Could you create an image of a quiet forest?",
     "Draw a red robot.",
+    "Please draw a mountain landscape.",
     "Please create an illustration of a quiet forest.",
     "Lukiskan pemandangan pantai saat senja.",
   ]) {
@@ -167,6 +170,24 @@ test("explicit image creation prompts are detected without mistaking analysis fo
   assert.equal(isImageGenerationRequest("How do I draw a mountain?"), false);
   assert.equal(isImageGenerationRequest("Picture of a red robot in a garden."), true);
   assert.equal(isImageGenerationRequest("Tolong buat gambar dari foto ini."), true);
+});
+
+test("website briefs that mention image placeholders stay on the text-chat route", () => {
+  const brief = `Peran: Developer front-end senior. Tugas: Buat website portofolio pribadi yang profesional dan siap dipublikasikan.
+Konteks: nama [Nama lengkap], profesi [UI/UX Designer], target rekruter dan klien, tujuan mendapat pekerjaan, konten Bahasa Indonesia.
+Tech stack: HTML, CSS, JavaScript murni; satu file jika memungkinkan, bersih dan mudah diedit.
+Desain: editorial minimalis, pilih palet dan font yang cocok, hindari template generik, dukung light/dark mode.
+Struktur: navbar sticky dan hamburger; hero dengan dua CTA; tentang saya dan fakta cepat; skill per kategori; 3-6 proyek dengan filter dan detail studi kasus; pengalaman dan pendidikan; testimoni; artikel; kontak dengan validasi; footer.
+Konten kosong harus memakai placeholder yang ditandai <!-- GANTI: ... -->. Gambar placeholder memakai gradient atau SVG lokal.
+Interaksi: scroll reveal, hover, smooth scroll, active section, theme toggle, reduced motion.
+Responsif mobile-first, uji 360px, 768px, 1280px; aksesibel, keyboard, fokus jelas, kontras WCAG AA.
+SEO: title, description, Open Graph, favicon; lazy-load; target Lighthouse 90+.
+Output: kode lengkap, cara ganti konten/warna/font, deploy gratis, dan 3 ide lanjutan.`;
+  assert.equal(isImageGenerationRequest(brief), false);
+  assert.equal(isImageGenerationRequest("Gambar placeholder memakai gradient atau SVG untuk website."), false);
+  assert.equal(isImageGenerationRequest("Tugas: Buatkan gambar seekor kucing di taman."), true);
+  assert.equal(isImageGenerationRequest("Create a website with an image placeholder and a theme toggle."), false);
+  assert.equal(isImageGenerationRequest("Tugas utama: Buatkan gambar seekor kucing di taman."), true);
 });
 
 test("structured responses are requested for visual, file, email, and reminder actions", () => {

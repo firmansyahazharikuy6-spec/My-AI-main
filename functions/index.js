@@ -9,7 +9,8 @@ initializeApp();
 
 const REGION = "us-central1";
 const PROVIDER_KEYS = defineSecret("AI_PROVIDER_KEYS");
-const PROVIDERS = ["gemini", "groq", "openrouter", "nvidia", "modelscope", "deepseek", "llm7"];
+const PROVIDERS = ["groq", "openrouter", "nvidia", "modelscope", "deepseek", "llm7"];
+const RETIRED_PROVIDERS = ["gemini"];
 const OPENAI_ENDPOINTS = {
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
   groq: "https://api.groq.com/openai/v1/chat/completions",
@@ -42,7 +43,7 @@ function readProviderKeys() {
   }
 
   for (const name of Object.keys(parsed)) {
-    if (!PROVIDERS.includes(name)) {
+    if (!PROVIDERS.includes(name) && !RETIRED_PROVIDERS.includes(name)) {
       throw new HttpError(500, `Provider "${name}" tidak dikenal di AI_PROVIDER_KEYS.`);
     }
     if (parsed[name] !== "" && typeof parsed[name] !== "string") {
@@ -107,15 +108,6 @@ function buildDefaultGroups(keys, showPaid) {
   if (keys.openrouter) {
     groups.push({
       provider: "openrouter",
-      label: "Qwen Super Cepat (Utama)",
-      tag: "Default · gratis & cepat",
-      models: [
-        { id: "qwen/qwen3-8b:free", name: "Qwen3 8B · super cepat" },
-        { id: "qwen/qwq-32b:free", name: "Qwen QwQ 32B · reasoning gratis" },
-      ],
-    });
-    groups.push({
-      provider: "openrouter",
       label: "OpenRouter Gratis",
       tag: "Model gratis yang tersedia",
       models: [{ id: "openrouter/auto", name: "Auto (model terbaik gratis/termurah)" }],
@@ -140,28 +132,12 @@ function buildDefaultGroups(keys, showPaid) {
       models: [{ id: "deepseek-chat", name: "DeepSeek Chat" }],
     });
   }
-  if (keys.llm7) {
-    groups.push({
-      provider: "llm7",
-      label: "LLM7",
-      tag: "LLM7 API",
-      models: [{ id: "qwen/qwen3-8b", name: "Qwen3 8B" }],
-    });
-  }
-  if (keys.gemini) {
-    groups.push({
-      provider: "gemini",
-      label: "Google Gemini Gratis",
-      tag: "Kuota gratis Google AI Studio",
-      models: [{ id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" }],
-    });
-  }
   if (keys.groq) {
     groups.push({
       provider: "groq",
       label: "Groq Gratis",
       tag: "Kuota gratis Groq",
-      models: [{ id: "qwen/qwen3-32b", name: "Qwen3 32B · super cepat" }],
+      models: [{ id: "llama-3.1-8b-instant", name: "Llama 3.1 8B Instant" }],
     });
   }
   if (keys.nvidia) {
@@ -240,22 +216,6 @@ async function listOpenRouterImageModels() {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-async function listGeminiModels(key) {
-  const response = await catalogFetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", {
-    headers: { "x-goog-api-key": key },
-  });
-  if (!response.ok) throw new Error(`Gemini: ${await upstreamErrorMessage(response, key)}`);
-  const { models = [] } = await response.json();
-  return models
-    .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
-    .filter((model) => /gemini|gemma/i.test(model.name) && !/tts|image|embedding|live|native-audio|robotics|computer-use/i.test(model.name))
-    .map((model) => ({
-      id: model.name.replace(/^models\//, ""),
-      name: model.displayName || model.name,
-    }))
-    .sort((left, right) => right.id.localeCompare(left.id));
-}
-
 async function listGroqModels(key) {
   const response = await catalogFetch("https://api.groq.com/openai/v1/models", {
     headers: { Authorization: `Bearer ${key}` },
@@ -285,13 +245,6 @@ async function loadCatalogs(groups, keys, showPaid) {
       label: "OpenRouter Image",
       load: listOpenRouterImageModels,
       apply: (models) => replaceGroup(groups, "openrouter-image", "OpenRouter Image", "Katalog API gambar", models),
-    });
-  }
-  if (keys.gemini) {
-    jobs.push({
-      label: "Google Gemini",
-      load: () => listGeminiModels(keys.gemini),
-      apply: (models) => replaceGroup(groups, "gemini", "Google Gemini Gratis", "Katalog API Gemini", models),
     });
   }
   if (keys.groq) {
@@ -425,27 +378,6 @@ async function streamUpstream(response, res) {
   if (!res.writableEnded) res.end();
 }
 
-function geminiRequestBody(messages, input) {
-  const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n");
-  const contents = messages.filter((message) => message.role !== "system").map((message) => ({
-    role: message.role === "assistant" ? "model" : "user",
-    parts: [
-      { text: message.content },
-      ...(message.images || []).map((image) => {
-        const match = image.match(/^data:([^;]+);base64,(.+)$/);
-        if (!match) throw new HttpError(400, "Gemini menerima lampiran gambar dalam format data URL.");
-        return { inlineData: { mimeType: match[1], data: match[2] } };
-      }),
-    ],
-  }));
-  return {
-    contents,
-    generationConfig: { temperature: input.temperature },
-    ...(input.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
-    ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-  };
-}
-
 function openAIRequestBody(input) {
   const messages = input.messages.map((message) => {
     const { images, ...plainMessage } = message;
@@ -493,17 +425,6 @@ async function sendImageRequest(req, res, input, keys, controller) {
     throw new HttpError(502, "OpenRouter tidak mengembalikan gambar. Coba model lain atau periksa akses akun.");
   }
   res.json(result);
-}
-
-async function sendGeminiRequest(res, input, key, controller) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`;
-  const response = await providerFetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify(geminiRequestBody(input.messages, input)),
-  }, "Gemini", controller);
-  if (!response.ok) return sendProviderError(res, "Gemini", response, key);
-  await streamUpstream(response, res);
 }
 
 async function sendOpenAIRequest(req, res, input, key, controller) {
@@ -566,8 +487,6 @@ async function chat(req, res, keys) {
   try {
     if (input.imageGeneration) {
       await sendImageRequest(req, res, input, keys, controller);
-    } else if (input.provider === "gemini") {
-      await sendGeminiRequest(res, input, key, controller);
     } else {
       await sendOpenAIRequest(req, res, input, key, controller);
     }
