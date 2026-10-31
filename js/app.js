@@ -6096,7 +6096,7 @@ function explainFirebaseAuthError(error) {
     return "Browser memblokir jendela masuk. Izinkan pop-up untuk situs ini lalu coba lagi.";
   }
   if (error?.code === "auth/redirect-no-result") {
-    return "Otorisasi tidak selesai. Coba lagi; jika terus terjadi, periksa callback OAuth Firebase pada aplikasi provider.";
+    return "Otorisasi tidak selesai. Tekan lagi tombol masuk dan selesaikan di halaman Google; jika jendela masuk diblokir, izinkan pop-up untuk situs ini.";
   }
   if (error?.code === "auth/unauthorized-domain") {
     if (location.hostname === "127.0.0.1") {

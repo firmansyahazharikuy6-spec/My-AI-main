@@ -75,17 +75,22 @@ export async function initFirebase(onUserChange) {
     });
     if (!native) {
       const pendingProvider = sessionStorage.getItem(PENDING_AUTH_PROVIDER_KEY);
+      // Parameter OAuth di URL menandai balikan redirect yang gagal; tanpa itu,
+      // kunci pending hanyalah sisa percobaan lama di tab yang sama.
+      const oauthReturn = /[?&](?:code|state|oauth_token|oauth_verifier)=/.test(location.search);
       try {
         const result = await fb.getRedirectResult(auth);
-        if (!result && pendingProvider) {
+        if (!result && pendingProvider && oauthReturn) {
           const error = new Error("Autentikasi kembali tanpa menyelesaikan login.");
           error.code = "auth/redirect-no-result";
           lastAuthError = error;
           lastAuthProvider = pendingProvider;
         }
       } catch (error) {
-        lastAuthError = error;
-        lastAuthProvider = pendingProvider;
+        if (pendingProvider && oauthReturn) {
+          lastAuthError = error;
+          lastAuthProvider = pendingProvider;
+        }
       } finally {
         sessionStorage.removeItem(PENDING_AUTH_PROVIDER_KEY);
       }
@@ -153,7 +158,9 @@ export async function signIn({ allowRedirectFallback = true } = {}) {
   }
   const provider = new fb.GoogleAuthProvider();
   try {
-    return await fb.signInWithPopup(auth, provider);
+    const result = await fb.signInWithPopup(auth, provider);
+    sessionStorage.removeItem(PENDING_AUTH_PROVIDER_KEY);
+    return result;
   } catch (error) {
     if (allowRedirectFallback && ["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(error?.code)) {
       sessionStorage.setItem(PENDING_AUTH_PROVIDER_KEY, "google");
@@ -188,7 +195,9 @@ export async function signInWithGithub() {
       }
       return await fb.signInWithCredential(auth, fb.GithubAuthProvider.credential(accessToken));
     }
-    return await fb.signInWithPopup(auth, provider);
+    const result = await fb.signInWithPopup(auth, provider);
+    sessionStorage.removeItem(PENDING_AUTH_PROVIDER_KEY);
+    return result;
   } catch (error) {
     if (error?.code === "auth/account-exists-with-different-credential") {
       const credential = fb.GithubAuthProvider.credentialFromError(error);
