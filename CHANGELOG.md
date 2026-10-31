@@ -16,6 +16,7 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 ## Perbaikan sign-in, terjemahan, dan pipeline gambar di v5.47 (30 Oktober 2026)
 
 - CSP Pages (`pages/_headers`) kini mengizinkan `https://apis.google.com` di `script-src` serta `https://accounts.google.com` di `frame-src` dan `img-src`. Sebelumnya SDK Firebase Auth memuat GIS `api.js` dan halaman akun Google yang diblokir CSP, sehingga login gagal dengan `auth/internal-error`; perubahan berlaku setelah deploy ulang Pages.
+- Status redirect login yang kedaluwarsa tidak lagi memunculkan dialog "Login Google belum selesai" palsu saat aplikasi dibuka. Error redirect hanya dilaporkan jika URL balikan benar-benar membawa parameter OAuth; kunci pending dibersihkan setelah popup login berhasil, dan pesan error dibuat lebih mudah ditindaklanjuti pengguna.
 - Kunci terjemahan `tierPickerTitle` ditambahkan untuk English, Bahasa Indonesia, dan Español; sebelumnya badge pemilih tier menampilkan key mentah `tierPickerTitle: FREE` di ketiga bahasa.
 - Antrean edit gambar (`IMAGE_EDIT_QUEUE` Durable Object, migrasi v4, cron per menit), modul skills dan memory, modul AI lokal, pembaruan UI web, rute gateway Pages, dan konfigurasi Android diperbarui.
 - Worker `myai-v3-free-api` dan situs Pages `myai-v3-firmansyah` disebarkan ulang dengan perubahan ini; CI GitHub hijau, audit browser pada situs live bersih (konsol tanpa error, guest chat end-to-end berhasil), dan situs terpasang sebagai PWA.
