@@ -1,6 +1,10 @@
 export const GUEST_TRIAL_LIMIT = 2;
 export const EMAIL_DAILY_LIMIT = 20;
 export const EMAIL_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
+export const CLOUD_CHAT_DAILY_LIMIT = 3;
+export const MAX_ACCOUNT_DEVICES = 5;
+export const IP_CLOUD_CHAT_DAILY_SIGNAL = 200;
+export const DEVICE_IDLE_PRUNE_MS = 90 * 24 * 60 * 60 * 1000;
 
 export const AI_ROUTE_LIMITS = Object.freeze({
   "image-chat": Object.freeze({ perMinute: 5, perDay: 10, label: "pembuatan gambar melalui chat" }),
@@ -28,6 +32,110 @@ export function isMaintenanceAdmin(user, env) {
   return String(env?.AI_ADMIN_EMAILS || "")
     .split(",")
     .some((allowed) => allowed.trim().toLowerCase() === email);
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value)));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function accountQuotaStub(env, user) {
+  const identity = typeof user?.sub === "string" ? user.sub : "";
+  if (!identity) throw new Error("Akun tidak memiliki identitas pengguna.");
+  return env.AI_DAILY_RATE_LIMIT_STORE.get(env.AI_DAILY_RATE_LIMIT_STORE.idFromName(await sha256Hex(identity)));
+}
+
+async function accountQuotaRequest(stub, action, body) {
+  const response = await stub.fetch(`https://ai-daily-rate-limit.internal/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`Kuota akun gagal diproses (${action}): HTTP ${response.status}`);
+  return response.json();
+}
+
+export async function getAccountQuotaStatus(user, env) {
+  const admin = isMaintenanceAdmin(user, env);
+  if (admin) {
+    return {
+      admin: true,
+      plan: "admin",
+      chat: { used: 0, limit: null, remaining: null },
+      devices: { count: 1, limit: null },
+      adminEmails: String(env?.AI_ADMIN_EMAILS || "").split(",").map((value) => value.trim()).filter(Boolean),
+    };
+  }
+  if (!env.AI_DAILY_RATE_LIMIT_STORE) {
+    throw new Error("Penyimpanan kuota belum dikonfigurasi di Cloudflare Worker.");
+  }
+  const stub = await accountQuotaStub(env, user);
+  const status = await accountQuotaRequest(stub, "quota/status", {});
+  return {
+    admin: false,
+    plan: "free",
+    chat: { used: status.chatUsed, limit: CLOUD_CHAT_DAILY_LIMIT, remaining: status.chatRemaining },
+    devices: { count: status.deviceCount, limit: MAX_ACCOUNT_DEVICES },
+  };
+}
+
+export async function enforceCloudChatQuota(user, env, request, HttpError) {
+  if (isMaintenanceAdmin(user, env)) {
+    return { admin: true, remaining: null, limit: null };
+  }
+  if (!env.AI_DAILY_RATE_LIMIT_STORE) {
+    throw new HttpError(503, "Penyimpanan kuota chat cloud belum dikonfigurasi di Cloudflare Worker.");
+  }
+  const stub = await accountQuotaStub(env, user);
+  const rawDeviceId = request.headers.get("x-device-id") || "";
+  const deviceHash = await sha256Hex(/^[A-Za-z0-9-]{8,64}$/.test(rawDeviceId) ? rawDeviceId : `legacy:${user.sub}`);
+  let deviceResult;
+  try {
+    deviceResult = await accountQuotaRequest(stub, "device/register", {
+      deviceHash,
+      maxDevices: MAX_ACCOUNT_DEVICES,
+      idlePruneMs: DEVICE_IDLE_PRUNE_MS,
+    });
+  } catch {
+    throw new HttpError(503, "Batas perangkat tidak dapat diperiksa. Coba lagi nanti.");
+  }
+  if (deviceResult.allowed !== true) {
+    const error = new HttpError(403,
+      `Batas perangkat akun tercapai (${MAX_ACCOUNT_DEVICES} perangkat). Gunakan perangkat yang sudah terdaftar atau hubungi admin MyAI.`);
+    error.code = "DEVICE_LIMIT_EXCEEDED";
+    throw error;
+  }
+  let reserve;
+  try {
+    reserve = await accountQuotaRequest(stub, "cloud-chat/reserve", { limit: CLOUD_CHAT_DAILY_LIMIT });
+  } catch {
+    throw new HttpError(503, "Kuota chat cloud tidak dapat diperiksa. Coba lagi nanti.");
+  }
+  if (reserve.allowed !== true) {
+    const error = new HttpError(429,
+      `Batas chat cloud harian tercapai (${CLOUD_CHAT_DAILY_LIMIT}/hari untuk paket Free). Upgrade paket atau lanjutkan dengan AI lokal tanpa batas.`);
+    error.code = "CLOUD_QUOTA_EXCEEDED";
+    throw error;
+  }
+  const ip = request.headers.get("cf-connecting-ip");
+  if (ip && env.AI_DAILY_RATE_LIMIT_STORE) {
+    const ipStub = env.AI_DAILY_RATE_LIMIT_STORE.get(
+      env.AI_DAILY_RATE_LIMIT_STORE.idFromName(await sha256Hex(`ip:${ip}`)),
+    );
+    let ipResult;
+    try {
+      ipResult = await accountQuotaRequest(ipStub, "ip-signal/reserve", { limit: IP_CLOUD_CHAT_DAILY_SIGNAL });
+    } catch {
+      throw new HttpError(503, "Sinyal jaringan tidak dapat diperiksa. Coba lagi nanti.");
+    }
+    if (ipResult.allowed !== true) {
+      const error = new HttpError(429,
+        "Terlalu banyak aktivitas chat dari jaringan ini hari ini. Tunggu hingga besok atau gunakan AI lokal.");
+      error.code = "IP_ABUSE_SIGNAL";
+      throw error;
+    }
+  }
+  return { admin: false, remaining: reserve.remaining, limit: CLOUD_CHAT_DAILY_LIMIT };
 }
 
 export function outputTokenLimitForUser() {
@@ -149,29 +257,105 @@ export class AIRateLimitStore {
   }
 
   async fetch(request) {
-    if (request.method !== "POST" || new URL(request.url).pathname !== "/reserve") {
-      return new Response("Not found", { status: 404 });
-    }
+    if (request.method !== "POST") return new Response("Not found", { status: 404 });
+    const pathname = new URL(request.url).pathname;
     let body;
     try {
       body = await request.json();
     } catch {
       return Response.json({ error: "Invalid request body" }, { status: 400 });
     }
-    const limits = AI_ROUTE_LIMITS[body?.route];
-    if (!limits || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > limits.perDay) {
-      return Response.json({ error: "Invalid route or limit" }, { status: 400 });
+    if (pathname === "/reserve") {
+      const limits = AI_ROUTE_LIMITS[body?.route];
+      if (!limits || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > limits.perDay) {
+        return Response.json({ error: "Invalid route or limit" }, { status: 400 });
+      }
+      const day = new Date().toISOString().slice(0, 10);
+      const storageKey = `daily:${body.route}:${day}`;
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        const used = await txn.get(storageKey) || 0;
+        if (used >= body.limit) return { allowed: false, remaining: 0 };
+        const next = used + 1;
+        await txn.put(storageKey, next);
+        return { allowed: true, remaining: body.limit - next };
+      });
+      return Response.json(result);
     }
-    const day = new Date().toISOString().slice(0, 10);
-    const storageKey = `daily:${body.route}:${day}`;
-    const result = await this.ctx.storage.transaction(async (txn) => {
-      const used = await txn.get(storageKey) || 0;
-      if (used >= body.limit) return { allowed: false, remaining: 0 };
-      const next = used + 1;
-      await txn.put(storageKey, next);
-      return { allowed: true, remaining: body.limit - next };
-    });
-    return Response.json(result);
+    if (pathname === "/device/register") {
+      if (!/^[a-f0-9]{64}$/.test(body?.deviceHash || "")
+        || !Number.isSafeInteger(body.maxDevices) || body.maxDevices < 1 || body.maxDevices > 20) {
+        return Response.json({ error: "Invalid device registration" }, { status: 400 });
+      }
+      const now = Date.now();
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        const prefix = "device:";
+        const devices = await txn.list({ prefix });
+        const active = new Map();
+        for (const [key, record] of devices) {
+          if (record && typeof record.lastSeen === "number"
+            && now - record.lastSeen < (body.idlePruneMs || DEVICE_IDLE_PRUNE_MS)) {
+            active.set(key.slice(prefix.length), record);
+          } else {
+            await txn.delete(key);
+          }
+        }
+        const existing = active.has(body.deviceHash);
+        if (!existing && active.size >= body.maxDevices) {
+          return { allowed: false, deviceCount: active.size, deviceLimit: body.maxDevices };
+        }
+        await txn.put(`${prefix}${body.deviceHash}`, { lastSeen: now });
+        return {
+          allowed: true,
+          registered: !existing,
+          deviceCount: active.size + (existing ? 0 : 1),
+          deviceLimit: body.maxDevices,
+        };
+      });
+      return Response.json(result);
+    }
+    if (pathname === "/cloud-chat/reserve") {
+      if (!Number.isSafeInteger(body?.limit) || body.limit < 1) {
+        return Response.json({ error: "Invalid chat limit" }, { status: 400 });
+      }
+      const day = new Date().toISOString().slice(0, 10);
+      const storageKey = `daily:cloud-chat:${day}`;
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        const used = await txn.get(storageKey) || 0;
+        if (used >= body.limit) return { allowed: false, remaining: 0 };
+        const next = used + 1;
+        await txn.put(storageKey, next);
+        return { allowed: true, remaining: body.limit - next };
+      });
+      return Response.json(result);
+    }
+    if (pathname === "/ip-signal/reserve") {
+      if (!Number.isSafeInteger(body?.limit) || body.limit < 1) {
+        return Response.json({ error: "Invalid ip signal limit" }, { status: 400 });
+      }
+      const day = new Date().toISOString().slice(0, 10);
+      const storageKey = `daily:ip-cloud-chat:${day}`;
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        const used = await txn.get(storageKey) || 0;
+        if (used >= body.limit) return { allowed: false, remaining: 0 };
+        const next = used + 1;
+        await txn.put(storageKey, next);
+        return { allowed: true, remaining: body.limit - next };
+      });
+      return Response.json(result);
+    }
+    if (pathname === "/quota/status") {
+      const day = new Date().toISOString().slice(0, 10);
+      const [chatUsed, devices] = await Promise.all([
+        this.ctx.storage.get(`daily:cloud-chat:${day}`),
+        this.ctx.storage.list({ prefix: "device:" }),
+      ]);
+      return Response.json({
+        chatUsed: chatUsed || 0,
+        chatRemaining: Math.max(0, CLOUD_CHAT_DAILY_LIMIT - (chatUsed || 0)),
+        deviceCount: devices.size,
+      });
+    }
+    return new Response("Not found", { status: 404 });
   }
 }
 

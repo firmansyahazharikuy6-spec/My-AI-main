@@ -33,6 +33,9 @@ import { brandOf, modelBrandName } from "./models.js?v=20261029-v5.130";
 import { filterModelGroupsForMenu, isOpenRouterProvider, MODEL_MENU_PROVIDERS } from "../shared/model-catalog.js?v=20261029-v5.130";
 import { exportAssistantDocument } from "./documents.js?v=20261029-v5.130";
 import { startGeminiLiveSession } from "./live-voice.js?v=20261029-v5.130";
+import { adaptiveRouteSummary, engineRouteLabel, routeAdaptiveModel } from "./engine-router.js?v=20261029-v5.130";
+import { CAPABILITY_COUNT, capabilityCategories, searchCapabilities } from "./capabilities.js?v=20261029-v5.130";
+import { detectRecommendedPlatform, listDownloadPlatforms } from "./download-center.js?v=20261029-v5.130";
 import { applyLanguage, getLanguage, saveLanguage, translateText, translateDynamicText, translateTierText } from "./i18n.js?v=20261029-v5.130";
 import { compressImageFile } from "./image-compression.js?v=20261029-v5.130";
 import { MyAIFileToolsEngine } from "./file-tools-engine.js?v=20261029-v5.130";
@@ -74,12 +77,15 @@ import { isImageEditPrompt } from "./image-prompts.js?v=20261029-v5.130";
 import { createUsageTracker } from "./usage-tracker.js?v=20261029-v5.130";
 import { initializePlatform, isNativeApp, saveBlob, shareText } from "./platform.js?v=20261029-v5.130";
 import {
+  estimateWebGpuCatalogSize,
   getOllamaEndpoint,
   getWebGpuModelGroup,
   listOllamaModels,
+  prefetchWebGpuModels,
   saveOllamaEndpoint,
   streamOllamaChat,
   streamWebGpuChat,
+  WEBGPU_GUEST_MODEL_ID,
 } from "./local-ai.js?v=20261029-v5.130";
 import { getSkill, listSkills, parseSlashCommand, skillSystemContext, agenticInstructions } from "./skills.js?v=20261029-v5.130";
 import {
@@ -219,6 +225,9 @@ let taskMode = savedTaskMode === "general" ? "auto"
   : ["auto", "chat", "coding", "flash", "pro", "max", "image"].includes(savedTaskMode) ? savedTaskMode
     : "auto";
 let currentUser = null;
+let accountQuota = null;
+let quotaDialogShown = false;
+let adaptiveEngine = localStorage.getItem("myai_adaptive_engine") !== "0";
 let chats = [];
 let workFolders = loadWorkFolders();
 const collapsedWorkFolders = new Set();
@@ -491,6 +500,67 @@ function getProviderFailureStatus(error) {
 
 function isRateLimitOrQuotaError(error) {
   return isProviderRateLimitOrQuotaError(error);
+}
+
+function isAccountQuotaError(error) {
+  return /CLOUD_QUOTA_EXCEEDED|DEVICE_LIMIT_EXCEEDED/i.test(String(error?.message || error || ""));
+}
+
+async function refreshAccountQuota() {
+  if (!currentUser) {
+    accountQuota = null;
+    renderAccountQuota();
+    return;
+  }
+  try {
+    const token = await getAuthToken();
+    const response = await fetchAiApi("quota", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`Kuota akun gagal dimuat: HTTP ${response.status}`);
+    accountQuota = await response.json();
+  } catch (error) {
+    console.warn("Kuota akun tidak dapat dimuat:", error);
+    accountQuota = null;
+  }
+  renderAccountQuota();
+}
+
+function renderAccountQuota() {
+  const text = document.getElementById("accountQuotaText");
+  if (!text) return;
+  if (!accountQuota) {
+    text.textContent = "Chat Cloud: memuat…";
+    return;
+  }
+  const { admin, chat: chatQuota, devices } = accountQuota;
+  if (admin) {
+    text.textContent = "Chat Cloud: tanpa batas · Admin";
+    return;
+  }
+  const remaining = chatQuota?.remaining;
+  const limit = chatQuota?.limit;
+  const chatText = remaining === null || remaining === undefined || limit === null || limit === undefined
+    ? "Chat Cloud: paket Free"
+    : `Chat Cloud: ${remaining}/${limit} tersisa`;
+  const deviceText = devices?.count !== undefined && devices?.limit !== undefined
+    ? ` · Perangkat ${devices.count}/${devices.limit}`
+    : "";
+  text.textContent = chatText + deviceText;
+}
+
+function showQuotaDialog(error) {
+  const copy = document.getElementById("quotaDialogCopy");
+  if (copy) {
+    copy.textContent = /DEVICE_LIMIT_EXCEEDED/i.test(String(error?.message || ""))
+      ? "Akun ini sudah dipakai di 5 perangkat. Pakai perangkat yang sudah terdaftar, atau hubungi admin MyAI untuk bantuan."
+      : "Paket Free MyAI menyediakan 3 chat cloud per hari. AI Lokal (WebGPU) tetap tanpa batas dan gratis.";
+  }
+  if (!quotaDialogShown) {
+    quotaDialogShown = true;
+    document.getElementById("quotaDialog")?.showModal();
+  }
 }
 
 function providerStatusKey(provider) {
@@ -3079,6 +3149,17 @@ function renderAccount(user) {
   };
   tierRow.append(tierLabel, tierBadge, tierAction);
 
+  const quotaRow = document.createElement("div");
+  quotaRow.className = "user-quota-row";
+  const quotaLabel = document.createElement("span");
+  quotaLabel.className = "user-tier-label";
+  quotaLabel.textContent = "Kuota Hari Ini";
+  const quotaValue = document.createElement("span");
+  quotaValue.className = "user-quota-value";
+  quotaValue.id = "accountQuotaText";
+  quotaValue.textContent = "Chat Cloud: memuat…";
+  quotaRow.append(quotaLabel, quotaValue);
+
   const divider = document.createElement("div");
   divider.className = "user-popover-divider";
 
@@ -3107,7 +3188,7 @@ function renderAccount(user) {
   logout.onclick = () => signOutUser();
   profileRow.append(profileAvatar, profileName, logout);
 
-  popover.append(personalization, tierRow, divider, profileRow);
+  popover.append(personalization, tierRow, quotaRow, divider, profileRow);
   box.append(trigger, popover);
 
   const toggleMenu = () => {
@@ -3408,7 +3489,7 @@ function cacheOllamaModelGroup(group) {
 }
 
 function localModelGroups() {
-  const groups = [getWebGpuModelGroup()];
+  const groups = [getWebGpuModelGroup({ authenticated: !!currentUser })];
   const ollama = cachedOllamaModelGroup();
   if (ollama) groups.push(ollama);
   return groups;
@@ -3909,10 +3990,161 @@ function activateTierByName(tierName) {
   return activateTier();
 }
 
+let webGpuPrefetch = null;
+let webGpuPrefetchButtonUpdater = null;
+
+async function startWebGpuPrefetch() {
+  if (!currentUser || webGpuPrefetch?.running) return;
+  const group = getWebGpuModelGroup({ authenticated: true });
+  if (!group.models.length) return;
+  const totalGb = Math.round(estimateWebGpuCatalogSize());
+  const proceed = window.confirm(
+    `Unduh semua ${group.models.length} model WebGPU (±${totalGb} GB) ke cache browser?\n\n`
+    + "Model yang sudah tersimpan akan dilewati. Unduhan berjalan satu per satu dan bisa memakan waktu lama; "
+    + "browser dapat menghapus cache jika ruang penyimpanan penuh. Tombol Batal berhenti setelah model yang sedang berjalan selesai.",
+  );
+  if (!proceed) return;
+  const controller = new AbortController();
+  webGpuPrefetch = {
+    running: true, done: false, canceled: false,
+    index: 0, total: group.models.length, name: "", fraction: 0,
+    controller,
+  };
+  webGpuPrefetchButtonUpdater?.();
+  const friendlyName = (modelId) => group.models.find((model) => model.id === modelId)?.name || modelId;
+  try {
+    const result = await prefetchWebGpuModels({
+      modelIds: group.models.map((model) => model.id),
+      signal: controller.signal,
+      onProgress: (report) => {
+        const state = webGpuPrefetch;
+        if (!state?.running) return;
+        if (report.done || report.cached) {
+          state.index = group.models.findIndex((model) => model.id === report.model) + 1;
+        }
+        state.name = friendlyName(report.model);
+        state.fraction = report.fraction || 0;
+        webGpuPrefetchButtonUpdater?.();
+      },
+    });
+    webGpuPrefetch = {
+      running: false, done: true, canceled: false, total: group.models.length,
+      downloaded: result.downloaded, skipped: result.skipped,
+    };
+    toast(`✓ ${group.models.length} model WebGPU tersimpan di cache browser.`);
+  } catch (error) {
+    const canceled = error?.name === "AbortError";
+    webGpuPrefetch = {
+      running: false, done: false, canceled,
+      total: group.models.length,
+      index: webGpuPrefetch?.index || 0,
+      error: canceled ? "" : String(error?.message || error),
+    };
+    if (!canceled) toast(`Unduhan model terhenti: ${error?.message || error}`);
+  }
+  webGpuPrefetchButtonUpdater?.();
+}
+
+function renderWebGpuPrefetchRow() {
+  const row = document.createElement("div");
+  row.className = "model-prefetch-row";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "webgpuPrefetchBtn";
+  button.className = "model-prefetch-btn";
+  const update = () => {
+    const state = webGpuPrefetch;
+    if (state?.running) {
+      button.textContent = `⏹ Batalkan · ${state.index}/${state.total} · ${state.name || "…"} · ${Math.round((state.fraction || 0) * 100)}%`;
+      button.disabled = false;
+      return;
+    }
+    if (state?.done) {
+      button.textContent = `✓ ${state.total} model tersimpan di cache (${state.downloaded || 0} baru, ${state.skipped || 0} sudah ada)`;
+      button.disabled = true;
+      return;
+    }
+    if (state?.canceled) {
+      button.textContent = "⬇ Lanjutkan unduh semua model";
+      button.disabled = false;
+      return;
+    }
+    const totalGb = Math.round(estimateWebGpuCatalogSize());
+    button.textContent = `⬇ Unduh semua model (±${totalGb} GB, sekali saja)`;
+    button.disabled = false;
+  };
+  button.onclick = () => {
+    if (webGpuPrefetch?.running) {
+      webGpuPrefetch.controller?.abort();
+      return;
+    }
+    startWebGpuPrefetch();
+  };
+  webGpuPrefetchButtonUpdater = update;
+  row.append(button);
+  update();
+  return row;
+}
+
+function adaptiveCloudRemaining() {
+  if (!accountQuota) return 3;
+  if (accountQuota.admin) return Number.POSITIVE_INFINITY;
+  const remaining = accountQuota.chat?.remaining;
+  return Number.isFinite(remaining) ? remaining : 0;
+}
+
+function adaptiveWebGpuSupported() {
+  return typeof navigator !== "undefined" && Boolean(navigator.gpu);
+}
+
+function adaptiveOllamaAvailable() {
+  return [...models.values()].some((model) => canonicalModelProvider(model.provider) === "local-ollama");
+}
+
+function renderAdaptiveEngineRow() {
+  const row = document.createElement("div");
+  row.className = "model-adaptive-row";
+  const info = document.createElement("div");
+  info.className = "model-adaptive-info";
+  const title = document.createElement("span");
+  title.className = "model-adaptive-title";
+  title.textContent = "Mesin Adaptif";
+  const desc = document.createElement("span");
+  desc.className = "model-adaptive-desc";
+  const summary = adaptiveRouteSummary({
+    models: [...models.values()],
+    cloudRemaining: adaptiveCloudRemaining(),
+    webgpuSupported: adaptiveWebGpuSupported(),
+    ollamaAvailable: adaptiveOllamaAvailable(),
+  });
+  desc.textContent = summary
+    ? `Pilih otomatis ${summary} sesuai kemampuan & kuota.`
+    : "Pilih otomatis Cloud, WebGPU, atau Ollama sesuai kemampuan & kuota.";
+  info.append(title, desc);
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "model-adaptive-toggle";
+  toggle.setAttribute("role", "switch");
+  toggle.setAttribute("aria-checked", String(adaptiveEngine));
+  toggle.setAttribute("aria-label", "Mesin adaptif");
+  toggle.textContent = adaptiveEngine ? "AKTIF" : "NONAKTIF";
+  toggle.onclick = () => {
+    adaptiveEngine = !adaptiveEngine;
+    localStorage.setItem("myai_adaptive_engine", adaptiveEngine ? "1" : "0");
+    toast(adaptiveEngine
+      ? "Mesin adaptif aktif: model dipilih otomatis sesuai kemampuan dan kuota."
+      : "Mesin adaptif nonaktif: model yang kamu pilih dipakai langsung.");
+    renderModelList();
+  };
+  row.append(info, toggle);
+  return row;
+}
+
 function renderModelList() {
   const list = $("modelList");
   list.replaceChildren();
   let count = 0;
+  if (currentUser) list.append(renderAdaptiveEngineRow());
   const visibleGroups = modelGroupsForTask(taskMode, false);
   if (currentUser && serverCatalogErrors.length) {
     const warning = document.createElement("div");
@@ -4023,7 +4255,9 @@ function renderModelList() {
     modelList.className = "model-provider-families";
     modelList.hidden = !providerExpanded;
     if (!providerExpanded) {
-      section.append(heading, modelList);
+      section.append(heading);
+      if (provider === "local-webgpu" && currentUser) section.append(renderWebGpuPrefetchRow());
+      section.append(modelList);
       list.append(section);
       continue;
     }
@@ -4155,7 +4389,9 @@ function renderModelList() {
       familySection.append(familyHeading, versions);
       modelList.append(familySection);
     }
-    section.append(heading, modelList);
+    section.append(heading);
+    if (provider === "local-webgpu" && currentUser) section.append(renderWebGpuPrefetchRow());
+    section.append(modelList);
     list.append(section);
   }
 
@@ -4184,6 +4420,12 @@ function selectModel(value) {
   }
   if (!isTierAvailable(modelTierCategory(model), activeTier)) {
     toast(`Model ini memerlukan paket ${modelTierCategory(model).toUpperCase()}.`);
+    return;
+  }
+  if (canonicalModelProvider(model.provider) === "local-webgpu"
+    && !currentUser
+    && model.id !== WEBGPU_GUEST_MODEL_ID) {
+    toast("Model WebGPU lainnya terbuka setelah login dengan Google. Jalur trial menyediakan Llama 3.2 · Lite.");
     return;
   }
   if (modelIsOpenRouter(model)
@@ -5322,6 +5564,21 @@ async function respond() {
     toast(`${m.name} tidak bisa membaca gambar. Jawaban ini memakai ${vision.name}.`);
     m = vision;
   }
+  if (currentUser && adaptiveEngine && m && !imageGeneration && !documentFormat && !webSearch && !latestHasImages) {
+    const route = routeAdaptiveModel({
+      skillId: last.skillId || "umum",
+      models: [...models.values()],
+      cloudRemaining: adaptiveCloudRemaining(),
+      webgpuSupported: adaptiveWebGpuSupported(),
+      ollamaAvailable: adaptiveOllamaAvailable(),
+      providerOrder: GATEWAY_FALLBACK_PRIORITY,
+    });
+    const picked = route[0];
+    if (picked && `${picked.provider}::${picked.id}` !== `${m.provider}::${m.id}`) {
+      m = picked;
+      toast(`Mesin adaptif memilih: ${engineRouteLabel(picked, { cloudRemaining: adaptiveCloudRemaining() })}`);
+    }
+  }
   const keylessProvider = m.provider === "guest" || isLocalProvider(m.provider);
   if (!keylessProvider && !currentUser) {
     await failInline("Masuk dengan akun Google atau GitHub untuk memakai API AI server.");
@@ -5719,6 +5976,7 @@ async function respond() {
       const providerHealth = usageTracker.getHealth();
       const workerUnavailable = getProviderFailureStatus(error) === "UNREACHABLE";
       const quotaFailure = isRateLimitOrQuotaError(error);
+      const accountQuotaFailure = isAccountQuotaError(error);
       reply.rateLimited ||= quotaFailure;
       reply.failedProviders ||= [];
       if (!reply.failedProviders.includes(canonicalProvider(m.provider))) {
@@ -5737,12 +5995,14 @@ async function respond() {
               .filter((model) => canonicalProvider(model.provider) !== canonicalProvider(m.provider))
               .filter((model) => isTierAvailable(modelTierCategory(model), activeTier))
               .filter((model) => isProviderAllowedForTier(model.provider, activeTier))
-              .filter((model) => (GATEWAY_FALLBACK_PRIORITY.includes(model.provider) && !isPaidModel(model))
-                || (isLocalProvider(model.provider) && isLocalProvider(m.provider)))
+              .filter((model) => accountQuotaFailure
+                ? isLocalProvider(model.provider)
+                : (GATEWAY_FALLBACK_PRIORITY.includes(model.provider) && !isPaidModel(model))
+                  || (isLocalProvider(model.provider) && isLocalProvider(m.provider)))
               .filter((model) => !isProviderCircuitOpen(model.provider))
               .filter((model) => !["ERROR", "EXHAUSTED", "UNREACHABLE"].includes(providerHealth[providerStatusKey(model.provider)]?.status))
               .filter((model) => !webSearch || canonicalProvider(model.provider) === "openrouter"
-                || (isLocalProvider(model.provider) && isLocalProvider(m.provider)))
+                || (isLocalProvider(model.provider) && (isLocalProvider(m.provider) || accountQuotaFailure)))
               .filter((model) => !hasImages || model.imageSupport === true)
               .sort((left, right) => GATEWAY_FALLBACK_PRIORITY.indexOf(left.provider) - GATEWAY_FALLBACK_PRIORITY.indexOf(right.provider)
                 || left.name.localeCompare(right.name))
@@ -5761,6 +6021,9 @@ async function respond() {
           throw new Error(quotaFailure
               ? "Kuota atau kredit OpenRouter untuk Gemini Image tercapai."
               : `Gemini Image di OpenRouter gagal: ${explainAIError(error)}.`);
+        }
+        if (accountQuotaFailure) {
+          throw error;
         }
         if (quotaFailure) {
           toast("Provider menolak permintaan karena kuota atau rate limit. Kuota chat MyAI untuk akun login tidak aktif; batas provider tetap berlaku.");
@@ -5781,6 +6044,11 @@ async function respond() {
         guestTrialVersion++;
       }
       console.warn("Online AI request failed.", e);
+      const accountQuotaFailure = isAccountQuotaError(e);
+      if (accountQuotaFailure) {
+        refreshAccountQuota();
+        showQuotaDialog(e);
+      }
       reply.error = true;
       reply.offline = false;
       reply.rateLimited ||= isRateLimitOrQuotaError(e);
@@ -5789,13 +6057,19 @@ async function respond() {
         ? reply.rateLimited
           ? "Kuota atau kredit OpenRouter untuk Gemini Image tercapai. Tidak ada provider gambar lain yang akan digunakan; coba lagi setelah kredit tersedia."
           : `Gemini Image melalui OpenRouter belum dapat membuat gambar: ${explainAIError(e)}. Tidak ada provider gambar lain yang akan digunakan.`
-        : reply.rateLimited
-          ? "Provider menolak permintaan karena HTTP 402/429. Kuota chat MyAI untuk akun login tidak aktif; kuota, saldo, dan rate limit provider tetap berlaku. Coba provider lain atau periksa billing."
-          : `AI online belum dapat menjawab: ${explainAIError(e)}`;
+        : accountQuotaFailure
+          ? /DEVICE_LIMIT_EXCEEDED/i.test(e.message || "")
+            ? "Batas 5 perangkat per akun tercapai. Gunakan perangkat yang sudah terdaftar atau hubungi admin MyAI."
+            : "Batas 3 chat cloud per hari untuk paket Free sudah tercapai. AI Lokal tetap tanpa batas — pilih model WebGPU dari tombol model, atau lihat paket upgrade."
+          : reply.rateLimited
+            ? "Provider menolak permintaan karena HTTP 402/429. Kuota chat MyAI untuk akun login tidak aktif; kuota, saldo, dan rate limit provider tetap berlaku. Coba provider lain atau periksa billing."
+            : `AI online belum dapat menjawab: ${explainAIError(e)}`;
       if (reply.rateLimited) {
         toast(imageGeneration
           ? "Kuota atau kredit OpenRouter untuk Gemini Image sedang terbatas. MyAI tidak akan beralih ke provider gambar lain."
-          : "Batas penggunaan berasal dari provider. Kuota chat MyAI untuk akun login tidak aktif; kamu bisa mencoba provider lain dari tombol di bawah.");
+          : accountQuotaFailure
+            ? "Batas kuota paket MyAI tercapai. AI Lokal tetap tanpa batas, atau lihat paket upgrade."
+            : "Batas penggunaan berasal dari provider. Kuota chat MyAI untuk akun login tidak aktif; kamu bisa mencoba provider lain dari tombol di bawah.");
       }
       reply.rawContent = reply.content;
       completed = true;
@@ -5805,6 +6079,7 @@ async function respond() {
     abort = null;
     setBusy(false);
     $("progress").classList.add("hidden");
+    if (currentUser && !isLocalProvider(m.provider) && m.provider !== "guest") refreshAccountQuota();
     if (!reply.content && !reply.reasoning && !reply.generatedImages?.length) reply.content = "_(dihentikan)_";
     if (completed && !reply.error && !imageGeneration && reply.content.trim()) {
       try {
@@ -6427,6 +6702,128 @@ function openMonidDialog() {
     return;
   }
   $("monidDialog").showModal();
+}
+
+let capabilityCategory = "";
+
+const CAPABILITY_ENGINE_LABELS = Object.freeze({
+  cloud: "Cloud",
+  webgpu: "WebGPU",
+  ollama: "Ollama",
+});
+
+function renderCapabilities() {
+  const categoriesBox = $("capabilityCategories");
+  categoriesBox.replaceChildren();
+  const chip = (label, value, active) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `capability-chip${active ? " active" : ""}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(active));
+    button.textContent = label;
+    button.onclick = () => {
+      capabilityCategory = value;
+      renderCapabilities();
+    };
+    return button;
+  };
+  categoriesBox.append(chip("Semua", "", !capabilityCategory));
+  for (const category of capabilityCategories()) {
+    categoriesBox.append(chip(category, category, capabilityCategory === category));
+  }
+
+  const query = $("capabilitySearch").value.trim();
+  const matches = searchCapabilities(query, capabilityCategory);
+  const grid = $("capabilityGrid");
+  grid.replaceChildren();
+  for (const capability of matches) {
+    const card = document.createElement("article");
+    card.className = "capability-card";
+    card.setAttribute("role", "listitem");
+    const head = document.createElement("div");
+    head.className = "capability-card-head";
+    const label = document.createElement("span");
+    label.className = "capability-card-label";
+    label.textContent = capability.label;
+    head.append(label);
+    const engines = document.createElement("span");
+    engines.className = "capability-card-engines";
+    for (const engine of capability.engines) {
+      const badge = document.createElement("span");
+      badge.className = `capability-engine capability-engine-${engine}`;
+      badge.textContent = CAPABILITY_ENGINE_LABELS[engine] || engine;
+      engines.append(badge);
+    }
+    head.append(engines);
+    const hint = document.createElement("p");
+    hint.className = "capability-card-hint";
+    hint.textContent = capability.hint;
+    card.append(head, hint);
+    grid.append(card);
+  }
+  $("capabilityCount").textContent = `${matches.length} dari ${CAPABILITY_COUNT} kemampuan`;
+}
+
+function renderDownloadCenter() {
+  const recommended = detectRecommendedPlatform();
+  const box = $("downloadPlatforms");
+  box.replaceChildren();
+  for (const platform of listDownloadPlatforms()) {
+    const card = document.createElement("article");
+    card.className = `download-platform-card download-platform-${platform.id}${platform.id === recommended ? " recommended" : ""}`;
+    card.setAttribute("role", "listitem");
+    const head = document.createElement("div");
+    head.className = "download-platform-head";
+    const icon = document.createElement("span");
+    icon.className = "download-platform-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = platform.icon;
+    const title = document.createElement("span");
+    title.className = "download-platform-label";
+    title.textContent = platform.label;
+    head.append(icon, title);
+    if (platform.id === recommended) {
+      const badge = document.createElement("span");
+      badge.className = "download-recommended-badge";
+      badge.textContent = "⭐ Direkomendasikan untuk perangkatmu";
+      head.append(badge);
+    }
+    const status = document.createElement("span");
+    status.className = `download-platform-status ${platform.status}`;
+    status.textContent = platform.status === "live" ? "AKTIF" : "SEGERA HADIR";
+    head.append(status);
+    const description = document.createElement("p");
+    description.className = "download-platform-description";
+    description.textContent = platform.description;
+    card.append(head, description);
+    for (const format of platform.formats) {
+      const row = document.createElement("div");
+      row.className = "download-format-row";
+      const label = document.createElement("span");
+      label.className = "download-format-label";
+      label.textContent = format.label;
+      const size = document.createElement("span");
+      size.className = "download-format-size";
+      size.textContent = format.size || "";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "download-format-btn";
+      button.disabled = format.status === "soon";
+      button.textContent = format.status === "soon" ? "Segera" : "Buka";
+      if (format.id === "web-live") {
+        button.onclick = () => {
+          $("downloadCenterDialog").close();
+          toast("Web App MyAI sudah terbuka di tab ini — kamu sedang memakainya.");
+        };
+      } else if (format.id === "web-pwa") {
+        button.onclick = () => toast("Gunakan menu browser (⋯ → Tambahkan ke layar utama / Install app) untuk memasang MyAI sebagai aplikasi.");
+      }
+      row.append(label, size, button);
+      card.append(row);
+    }
+    box.append(card);
+  }
 }
 
 async function searchMonidEndpoints(event) {
@@ -7132,11 +7529,34 @@ function bindEvents() {
   $("openImageMode").onclick = () => setTaskMode("image");
   $("openFiles").onclick = () => $("fileInput").click();
   $("openMonid").onclick = openMonidDialog;
+  $("openCapabilities").onclick = () => {
+    capabilityCategory = "";
+    $("capabilitySearch").value = "";
+    renderCapabilities();
+    $("capabilityDialog").showModal();
+  };
+  $("closeCapabilityDialog").onclick = () => $("capabilityDialog").close();
+  $("capabilitySearch").addEventListener("input", () => renderCapabilities());
+  $("openDownloadCenter").onclick = () => {
+    renderDownloadCenter();
+    $("downloadCenterDialog").showModal();
+  };
+  $("closeDownloadCenter").onclick = () => $("downloadCenterDialog").close();
   $("themeToggle").querySelectorAll("[data-theme-choice]").forEach((button) => {
     button.onclick = () => applyTheme(button.dataset.themeChoice);
   });
   $("sidebarTierBadge").onclick = openTierModal;
   $("closeTierDialog").onclick = () => $("tierDialog").close();
+  $("closeQuotaDialog").onclick = () => $("quotaDialog").close();
+  $("quotaUpgrade").onclick = () => {
+    $("quotaDialog").close();
+    openTierModal();
+  };
+  $("quotaGoLocal").onclick = () => {
+    $("quotaDialog").close();
+    expandedModelProvider = "local-webgpu";
+    openModelMenu();
+  };
   $("confirmTier").onclick = activateTier;
   window.activateTier = activateTierByName;
   $("modelBtn").addEventListener("click", () => {
@@ -8866,6 +9286,8 @@ async function main() {
       }
       currentUser = user;
       renderAccount(user);
+      if (user) refreshAccountQuota();
+      if (authChanged) quotaDialogShown = false;
       let loginIntro = Promise.resolve();
       if (user) {
         enterApp();

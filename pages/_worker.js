@@ -6,6 +6,7 @@ const API_ROUTES = new Map([
   ["/api/guest/transcribe", "/guest/transcribe"],
   ["/api/guest/images/pollinations", "/guest/images/pollinations"],
   ["/api/models", "/models"],
+  ["/api/quota", "/quota"],
   ["/api/health", "/health"],
   ["/api/providers/test", "/providers/test"],
   ["/api/chat", "/chat"],
@@ -39,7 +40,7 @@ const ALLOWED_ORIGINS = new Set([
   "capacitor://localhost",
   "https://localhost",
 ]);
-const ALLOWED_REQUEST_HEADERS = "Content-Type, Authorization, X-Requested-With, X-Turnstile-Token, X-Guest-Device-Id, X-Email-Confirmation";
+const ALLOWED_REQUEST_HEADERS = "Content-Type, Authorization, X-Requested-With, X-Turnstile-Token, X-Guest-Device-Id, X-Email-Confirmation, X-Device-Id";
 function buildCorsHeaders(request) {
   const origin = request.headers.get("Origin");
   const allowOrigin = origin && ALLOWED_ORIGINS.has(origin) ? origin : "";

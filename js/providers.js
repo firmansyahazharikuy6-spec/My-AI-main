@@ -135,6 +135,14 @@ function getGuestDeviceId() {
   return deviceId;
 }
 
+function getAccountDeviceId() {
+  try {
+    return getGuestDeviceId();
+  } catch {
+    return "";
+  }
+}
+
 async function loadGuestTurnstile() {
   if (globalThis.turnstile) return globalThis.turnstile;
   if (!guestTurnstileScriptPromise) {
@@ -747,6 +755,7 @@ async function* gatewayStream(provider, model, messages, opts, signal) {
   }
   const apiBase = AI_API_URL.replace(/\/+$/, "");
   let response;
+  const deviceId = getAccountDeviceId();
   try {
     response = await fetchAiApi("gateway", {
       method: "POST",
@@ -754,6 +763,7 @@ async function* gatewayStream(provider, model, messages, opts, signal) {
       headers: {
         Authorization: `Bearer ${opts.authToken}`,
         "Content-Type": "application/json",
+        ...(deviceId ? { "X-Device-Id": deviceId } : {}),
       },
       body,
     }, { baseUrl: apiBase });
@@ -811,12 +821,14 @@ async function* serverStream(provider, model, messages, opts, signal) {
     throw new Error("Permintaan online maksimal 4 MiB. Hapus beberapa lampiran atau lanjutkan chat baru.");
   }
   const apiBase = AI_API_URL.replace(/\/+$/, "");
+  const deviceId = getAccountDeviceId();
   const response = await fetchAiApi("chat", {
     method: "POST",
     signal,
     headers: {
       Authorization: `Bearer ${opts.authToken}`,
       "Content-Type": "application/json",
+      ...(deviceId ? { "X-Device-Id": deviceId } : {}),
     },
     body,
   }, { baseUrl: apiBase });

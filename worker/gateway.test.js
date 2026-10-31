@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setFetch } from "../test/set-fetch.js";
-import { dailyLimitForUser, isMaintenanceAdmin, outputTokenLimitForUser } from "./src/rate-limit.js";
+import { dailyLimitForUser, isMaintenanceAdmin, outputTokenLimitForUser, CLOUD_CHAT_DAILY_LIMIT, MAX_ACCOUNT_DEVICES } from "./src/rate-limit.js";
 import pagesWorker from "../pages/_worker.js";
 import { clearGatewayCatalogCache, gatewayModelGroups, handleGatewayRequest, modelAccessTier, probeGatewayProvider, PROVIDER_ADAPTERS, streamResponse as gatewayStreamResponse, testGatewayProvider, validateGatewayBody } from "./src/gateway.js";
 import worker, { AIRateLimitStore, AI_ROUTE_LIMITS, callImageEditProvider, EmailActionStore, GuestTrialCounter, guestModelsForKeys, ImageEditQueue, isAllowedOrigin, isImageEditRequest, readProviderKeys, streamResponse, validateChatBody, validatePresentationBody, withCoreSystemInstruction, withUserPersonalization } from "./src/index.js";
@@ -790,7 +790,7 @@ test("Worker CORS accepts production, Pages previews, and local development orig
   assert.equal(response.status, 204);
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), "https://preview-branch.myai-v3-firmansyah.pages.dev");
   assert.equal(response.headers.get("Access-Control-Allow-Methods"), "GET, POST, OPTIONS");
-  assert.equal(response.headers.get("Access-Control-Allow-Headers"), "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id");
+  assert.equal(response.headers.get("Access-Control-Allow-Headers"), "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id, X-Device-Id");
 
   const disallowedResponse = await worker.fetch(new Request("https://worker.test/chat", {
     method: "OPTIONS",
@@ -3457,11 +3457,12 @@ test("image prompt enhancement falls back to Groq and repairs invalid JSON (MOCK
   assert.doesNotMatch(JSON.stringify(result), /groq-secret/);
 });
 
-test("authenticated OpenRouter chat bypasses MyAI quotas and uses the catalog maximum when known", async (context) => {
+test("authenticated OpenRouter chat counts toward cloud chat quota and uses the catalog maximum when known", async (context) => {
   clearGatewayCatalogCache("openrouter");
   const { token, jwk } = await authorizedToken();
   let sentBody;
   let limiterCalls = 0;
+  const dailyCalls = [];
   setFetch(context, async (url, options = {}) => {
     const target = String(url);
     if (target.includes("securetoken@system.gserviceaccount.com")) {
@@ -3489,6 +3490,7 @@ test("authenticated OpenRouter chat bypasses MyAI quotas and uses the catalog ma
       Authorization: ["Bearer", token].join(" "),
       "Content-Type": "application/json",
       Origin: "https://myai-v3-firmansyah.pages.dev",
+      "X-Device-Id": "test-device-0001",
     },
     body: JSON.stringify({
       provider: "openrouter",
@@ -3500,11 +3502,14 @@ test("authenticated OpenRouter chat bypasses MyAI quotas and uses the catalog ma
     AUTHORIZED_EMAILS: "user@example.com",
     OPENROUTER_API_KEY: "openrouter-secret",
     AI_RATE_LIMITER: { limit: async () => { limiterCalls += 1; return { success: false }; } },
+    AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(true, dailyCalls),
   });
   assert.equal(response.status, 200);
   assert.equal(limiterCalls, 0);
   assert.equal(sentBody.max_tokens, 32_000);
   assert.match(await response.text(), /OpenRouter works/);
+  assert.equal(dailyCalls.some((call) => call.limit === CLOUD_CHAT_DAILY_LIMIT), true);
+  assert.equal(dailyCalls.some((call) => typeof call.deviceHash === "string" && call.maxDevices === MAX_ACCOUNT_DEVICES), true);
 });
 
 test("direct Groq chat caps output tokens at the model limit", async (context) => {

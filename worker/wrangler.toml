@@ -6,6 +6,7 @@ workers_dev = true
 [vars]
 FIREBASE_PROJECT_ID = "my-ai-69027"
 APP_ORIGINS = ""
+AI_ADMIN_EMAILS = ""
 EMAIL_RECIPIENT_ALLOWED_DOMAINS = ""
 CANVA_BRAND_TEMPLATE_ID = "OC-AaFxcyrOgfCY"
 CANVA_REDIRECT_URI = "https://myai-v3-free-api.firmansyahazharikuy6.workers.dev/canva/oauth/callback"

@@ -28,7 +28,9 @@ import {
   outputTokenLimitForUser,
   EmailActionStore,
   enforceAIRateLimit as applyAIRateLimit,
+  enforceCloudChatQuota as applyCloudChatQuota,
   enforceGuestRateLimit as applyGuestRateLimit,
+  getAccountQuotaStatus,
   guestTrialCounter as countGuestTrial,
   GuestTrialCounter,
 } from "./rate-limit.js";
@@ -39,7 +41,7 @@ import { handleMonidRoute, MONID_API_BASE } from "./routes/monid.js";
 import { sendEmail as handleSendEmail, sendEmailPreview as handleSendEmailPreview } from "./routes/email.js";
 import { createGuestHandlers } from "./routes/guest.js";
 import { handleGuestRoute } from "./routes/guest.js";
-import { isOpenRouterProvider, MODEL_MENU_PROVIDERS } from "../../shared/model-catalog.js";
+import { MODEL_MENU_PROVIDERS } from "../../shared/model-catalog.js";
 import { isImageGenerationRequest } from "../../shared/image-intent.js";
 export { isAllowedOrigin } from "./http.js";
 export { AI_ROUTE_LIMITS, AIRateLimitStore, EmailActionStore, GuestTrialCounter } from "./rate-limit.js";
@@ -177,7 +179,7 @@ export function isImageEditRequest(prompt) {
 
 function corsHeaders(request = null) {
   return sharedCorsHeaders(request, {
-    allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id",
+    allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id, X-Device-Id",
     exposeHeaders: "X-Guest-Remaining",
     maxAge: "86400",
   });
@@ -186,7 +188,7 @@ function corsHeaders(request = null) {
 function jsonResponse(body, status = 200, request = null) {
   return sharedJsonResponse(body, status, request, {
     cors: {
-      allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id",
+      allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id, X-Device-Id",
       exposeHeaders: "X-Guest-Remaining",
       maxAge: "86400",
     },
@@ -208,6 +210,7 @@ function rejectDisallowedOrigin() {
 }
 
 const enforceAIRateLimit = (user, env, route) => applyAIRateLimit(user, env, route, HttpError);
+const enforceCloudChatQuota = (user, env, request) => applyCloudChatQuota(user, env, request, HttpError);
 
 async function transcribeAudio(request, keys, user, env) {
   if (request.method !== "POST") throw new HttpError(405, "Gunakan POST untuk mengirim audio.");
@@ -662,7 +665,7 @@ export function streamResponse(
     status: response.status,
     request,
     cors: {
-      allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id",
+      allowHeaders: "Content-Type, Authorization, X-Requested-With, X-Email-Confirmation, X-Turnstile-Token, X-Guest-Device-Id, X-Device-Id",
       exposeHeaders: "X-Guest-Remaining",
       maxAge: "86400",
     },
@@ -763,7 +766,7 @@ async function chat(request, keys, user, env) {
       ? requestedProvider
       : "";
   if (gatewayProvider) {
-    if (!isOpenRouterProvider(gatewayProvider)) await enforceAIRateLimit(user, env, "chat");
+    await enforceCloudChatQuota(user, env, request);
     const headers = new Headers(request.headers);
     headers.delete("Content-Length");
     const gatewayRequest = new Request(request.url, {
@@ -780,7 +783,7 @@ async function chat(request, keys, user, env) {
     });
     return handleGatewayRequest(gatewayRequest, keys, { user, env });
   }
-  await enforceAIRateLimit(user, env, "chat");
+  await enforceCloudChatQuota(user, env, request);
   const input = {
     ...await validateChatBody(body, keys, outputTokenLimitForUser(user, env)),
     startedAt,
@@ -1820,6 +1823,10 @@ export default {
         }, 401);
       }
       if (route === "models") return await getModels(request, keys, warnings);
+      if (route === "quota") {
+        if (request.method !== "GET") throw new HttpError(405, "Gunakan GET untuk melihat kuota akun.");
+        return jsonResponse(await getAccountQuotaStatus(user, env));
+      }
       if (route === "chat") return await chat(request, keys, user, env);
       if (route === "enhance-prompt") {
         await enforceAIRateLimit(user, env, "enhance-prompt");
@@ -1831,7 +1838,7 @@ export default {
         if (!MODEL_MENU_PROVIDERS.includes(body.provider)) {
           throw new HttpError(400, "Provider gateway harus merupakan provider chat yang didukung.");
         }
-        if (!isOpenRouterProvider(body.provider)) await enforceAIRateLimit(user, env, "chat");
+        await enforceCloudChatQuota(user, env, request);
         const headers = new Headers(request.headers);
         headers.delete("Content-Length");
         const gatewayRequest = new Request(request.url, {
@@ -1859,7 +1866,7 @@ export default {
           message: error instanceof HttpError || error instanceof CanvaError
             ? error.message
             : "Terjadi kesalahan pada backend AI.",
-          ...(error instanceof CanvaError ? { code: error.code } : {}),
+          ...(error?.code ? { code: error.code } : {}),
         },
       }, status, request);
     }

@@ -13,6 +13,27 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 
 ---
 
+## Visibilitas tier, katalog WebGPU lokal, dan perbaikan CSP WebGPU (31 Oktober 2026)
+
+- Matriks visibilitas tier diubah: FREE hanya menampilkan model AI lokal (WebGPU & Ollama) tanpa model API Groq/NVIDIA/OpenRouter; BASIC hanya menampilkan model tier basic; PRO menampilkan free+basic+pro; MAX menampilkan semua. Fallback otomatis dan pemilihan model kini juga dibatasi oleh tier dan provider yang diizinkan.
+- Katalog "AI Lokal · WebGPU" diperluas dari 2 menjadi 62 model yang dapat diunduh (satu varian q4f16_1 per model dari daftar prebuilt `@mlc-ai/web-llm` 0.2.86; model embedding, vision, dan 70B dikecualikan). Model diunduh sekali lalu dibuka dari cache browser.
+- Jalur trial (tanpa login) hanya menampilkan Llama 3.2 1B · Lite untuk WebGPU; model WebGPU lainnya muncul setelah login Google.
+- Tombol "Unduh semua model" di grup AI Lokal · WebGPU (khusus pengguna login) mengunduh seluruh katalog ke cache browser sekaligus dengan progres dan opsi batal; model yang sudah tersimpan dilewati.
+- CSP Pages diperbaiki agar model WebGPU berjalan: `https://raw.githubusercontent.com` diizinkan di `connect-src` (unduhan pustaka WASM) dan `'wasm-unsafe-eval'` ditambahkan ke `script-src` (kompilasi WebAssembly). Error WebGPU tidak lagi salah dilabeli sebagai gangguan Worker lokal.
+
+---
+
+## SaaS MyAI: kuota akun, mesin adaptif, 150 kemampuan, dan Download Center (31 Oktober 2026)
+
+- **Kuota chat cloud berbasis akun + perangkat (bukan IP saja):** chat cloud (semua provider termasuk OpenRouter) dibatasi 3 per hari untuk akun non-admin; admin (email pada `AI_ADMIN_EMAILS`, login Google terverifikasi) tanpa batas. Identitas memakai kombinasi akun Firebase + ID perangkat aman (hash SHA-256 dari `X-Device-Id`, maksimal 5 perangkat terdaftar per akun, pruned setelah 90 hari idle) + IP hanya sebagai sinyal tambahan (ambang harian 200 per jaringan). Seluruh kuota divalidasi backend di Durable Object `AI_DAILY_RATE_LIMIT_STORE`; error `CLOUD_QUOTA_EXCEEDED` (429) dan `DEVICE_LIMIT_EXCEEDED` (403) dikembalikan dengan kode terpisah. AI Lokal tidak dibatasi.
+- **Endpoint kuota:** `GET /api/quota` (login wajib) melaporkan sisa chat cloud harian, jumlah perangkat terdaftar, dan status admin. Indikator kuota tampil di menu akun dan diperbarui otomatis setelah chat cloud.
+- **Alur upgrade setelah kuota habis:** dialog khusus mengarahkan ke AI Lokal (tanpa batas) atau paket upgrade — bukan mengakali lewat IP atau email; fallback otomatis setelah kuota habis hanya mencoba model AI Lokal.
+- **Mesin Adaptif:** toggle di pemilih model (login wajib) yang memilih Cloud → WebGPU → Ollama otomatis sesuai kemampuan yang dipakai (skill), sisa kuota, dan ketersediaan mesin lokal. Hasil rute selalu diberi label transparan (mis. "Mesin adaptif memilih: AI Lokal · WebGPU").
+- **Katalog 150 kemampuan:** daftar 150 kemampuan (bukan 150 model) dalam 12 kategori dengan pencarian, filter, dan label mesin (Cloud/WebGPU/Ollama) per kemampuan; dibuka dari tombol "150 Kemampuan" di sidebar.
+- **Download Center:** tiga platform (Mobile, Desktop, Web App) dengan rekomendasi otomatis sesuai perangkat, opsi unduh satuan per platform, dan ZIP gabungan per platform. Installer Mobile & Desktop masih placeholder "Segera hadir"; Web App aktif.
+
+---
+
 ## Perbaikan sign-in, terjemahan, dan pipeline gambar di v5.47 (30 Oktober 2026)
 
 - CSP Pages (`pages/_headers`) kini mengizinkan `https://apis.google.com` di `script-src` dan `connect-src` serta `https://accounts.google.com` di `frame-src`, `img-src`, dan `connect-src`. Sebelumnya SDK Firebase Auth memuat GIS `api.js` yang diblokir CSP sehingga login gagal dengan `auth/internal-error`, dan ping `gen_204` Google Identity Services (cek ketersediaan cookie) diblokir `connect-src` sehingga handoff login bisa gagal diam-diam dan pengguna kembali ke halaman depan setelah selesai di Google.

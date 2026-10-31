@@ -100,6 +100,8 @@
         <button id="openImageMode" class="sidebar-action" type="button"><span class="sidebar-icon" aria-hidden="true">▧</span><span data-i18n="images">Images</span></button>
         <button id="openFiles" class="sidebar-action" type="button"><span class="sidebar-icon" aria-hidden="true">⌁</span><span data-i18n="attachments">Attachments</span></button>
         <button id="openMonid" class="sidebar-action" type="button"><span class="sidebar-icon" aria-hidden="true">⌕</span><span data-i18n="searchMonid">Search Monid data</span></button>
+        <button id="openCapabilities" class="sidebar-action" type="button"><span class="sidebar-icon" aria-hidden="true">⚡</span><span>150 Kemampuan</span></button>
+        <button id="openDownloadCenter" class="sidebar-action" type="button"><span class="sidebar-icon" aria-hidden="true">⬇</span><span>Download Center</span></button>
       </nav>
       <div class="recent-heading"><span data-i18n="chats">Chats</span></div>
       <div class="folder-toolbar">
@@ -289,6 +291,33 @@
     <p class="tier-dialog-copy" data-i18n="tierDialogCopy">Select the model tier that fits your work.</p>
     <div id="tierCards" class="tier-cards" role="list"></div>
     <button id="confirmTier" class="tier-confirm-btn" type="button" disabled data-i18n="tierActivate">🚀 Activate engine</button>
+  </dialog>
+
+  <dialog id="quotaDialog" class="quota-dialog" aria-labelledby="quotaDialogTitle">
+    <button id="closeQuotaDialog" class="dialog-close" type="button" aria-label="Tutup">×</button>
+    <h2 id="quotaDialogTitle">Batas Chat Cloud Hari Ini Tercapai</h2>
+    <p id="quotaDialogCopy" class="quota-dialog-copy">Paket Free MyAI menyediakan 3 chat cloud per hari. AI Lokal (WebGPU) tetap tanpa batas dan gratis.</p>
+    <div class="quota-dialog-actions">
+      <button id="quotaGoLocal" class="quota-dialog-btn quota-dialog-btn-primary" type="button">🤖 Lanjut dengan AI Lokal</button>
+      <button id="quotaUpgrade" class="quota-dialog-btn" type="button">⬆ Lihat Paket Upgrade</button>
+    </div>
+  </dialog>
+
+  <dialog id="capabilityDialog" class="capability-dialog" aria-labelledby="capabilityTitle">
+    <button id="closeCapabilityDialog" class="dialog-close" type="button" aria-label="Tutup">×</button>
+    <h2 id="capabilityTitle">150 Kemampuan MyAI</h2>
+    <p class="muted">Satu mesin universal, 150 kemampuan — bukan 150 model. Pilih kemampuan, MyAI yang memilihkan mesinnya.</p>
+    <input id="capabilitySearch" class="capability-search" type="search" placeholder="Cari kemampuan… (mis. kode, CV, subtitle)" autocomplete="off" />
+    <div id="capabilityCategories" class="capability-categories" role="tablist" aria-label="Kategori kemampuan"></div>
+    <div id="capabilityGrid" class="capability-grid" role="list"></div>
+    <p id="capabilityCount" class="capability-count muted" aria-live="polite"></p>
+  </dialog>
+
+  <dialog id="downloadCenterDialog" class="download-center-dialog" aria-labelledby="downloadCenterTitle">
+    <button id="closeDownloadCenter" class="dialog-close" type="button" aria-label="Tutup">×</button>
+    <h2 id="downloadCenterTitle">Download Center MyAI</h2>
+    <p class="muted">Pilih platformmu — rekomendasi otomatis sesuai perangkat. Installer Mobile & Desktop sedang disiapkan; Web App sudah aktif sekarang.</p>
+    <div id="downloadPlatforms" class="download-platforms" role="list"></div>
   </dialog>
 
   <div id="loginIntro" class="login-intro" aria-hidden="true">
