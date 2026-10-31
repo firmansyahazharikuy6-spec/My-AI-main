@@ -13,7 +13,13 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 
 ---
 
-## Idempotensi + refund kuota chat cloud, batas per-menit, dan pengamanan dokumen (31 Oktober 2026)
+## Audit adaptor Cloud AI (31 Oktober 2026)
+
+- **Audit adaptor lengkap** (lihat `docs/BASELINE-V5.md` §7): kelima provider (`openrouter`, `groq`, `nvidia`, `claude`, `kimi`) punya adaptor gateway nyata (claude via adaptor asli Anthropic); probe health semua endpoint nyata (monid & gemini-live jujur soal keterbatasannya); tidak ada adaptor mati di worker.
+- **Validasi jalur langsung kini menolak `claude`** dengan instruksi jelas untuk memakai AI gateway (sebelumnya lolos validasi lalu gagal bingung karena tidak ada endpoint OpenAI-compat untuk claude). Claude tetap berfungsi penuh lewat gateway.
+- **Ditemukan & didokumentasikan (belum dihapus):** cabang `modelscope` di `js/providers.js` adalah kode mati (worker tidak punya dukungan modelscope); diusulkan dibersihkan pada fase Creative Studio.
+
+---
 
 - **Idempotensi kuota chat cloud (§6.4):** `POST /api/chat` dan `/api/gateway` kini menerima `idempotencyKey` (satu kunci per pesan dari frontend); reservasi harian disimpan di DO dengan replay TTL 1 jam sehingga retry/double-submit tidak membakar kuota ganda. Namespace `idempotency:cloud:` terpisah penuh dari `idempotency:local:`.
 - **Refund konsisten:** reservasi chat cloud dikembalikan bila eksekusi gagal sebelum provider memproses (validasi body kini sebelum reservasi; provider tidak terjangkau/timeout; provider menolak dengan status error; semua percobaan gateway gagal — ditandai `X-MyAI-No-Billing`). Reservasi tetap terpakai begitu streaming dimulai, termasuk bila terputus di tengah. Refund idempoten dan best-effort — tidak mungkin double-refund.

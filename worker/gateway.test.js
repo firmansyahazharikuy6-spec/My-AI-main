@@ -3554,6 +3554,14 @@ test("direct Groq chat caps output tokens at the model limit", async (context) =
   assert.match(await response.text(), /"content":"hello"/);
 });
 
+test("legacy chat validation rejects Claude because it has no OpenAI-compatible direct endpoint", async () => {
+  await assert.rejects(validateChatBody({
+    provider: "claude",
+    model: "claude-3-5-haiku-latest",
+    messages: [{ role: "user", content: "Answer briefly." }],
+  }, { claude: "claude-secret" }), /Provider ini harus digunakan melalui AI gateway/);
+});
+
 test("chat Worker injects quality instructions into gateway model requests", async (context) => {
   clearGatewayCatalogCache("groq");
   const { token, jwk } = await authorizedToken();

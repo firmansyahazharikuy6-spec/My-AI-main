@@ -58,7 +58,7 @@ Per §23 prompt (jangan mengarang kebijakan produk; tanya pemilik hanya untuk ke
 1. ✅ Phase Zero — audit & baseline (dokumen ini).
 2. ✅ Keamanan & anti-abuse — selesai 31 Oktober 2026: idempotensi + refund kuota chat cloud (§6.4), batas per-menit chat, dan tinjauan tiga item Low (detail di §6).
 3. ✅ Subscription & quota — **kuota AI Lokal Free 5/hari selesai** (counter independen + idempotensi + konfigurasi `LOCAL_AI_DAILY_LIMIT`). Sisa: sentralisasi penuh definisi entitlement (§6.5) saat integrasi pembayaran nyata.
-4. Cloud AI: verifikasi/audit adaptor, tanpa perubahan yang tidak perlu.
+4. ✅ Cloud AI: audit adaptor selesai 31 Oktober 2026 (detail di §7).
 5. Local AI & routing adaptif: audit rute + label transparan (label "tanpa batas" sudah dikoreksi).
 6. Creative Studio: pembersihan stub, batas antar-engine.
 7. Image Engine: §10 (intent, preservasi referensi, evaluasi vision + retry terbatas).
@@ -117,6 +117,31 @@ Per §23 prompt (jangan mengarang kebijakan produk; tanya pemilik hanya untuk ke
 3. **Fallback `documents.js` saat DOMPurify absen** — **diperbaiki**. `plainText()` tidak lagi memasukkan HTML mentah saat DOMPurify gagal dimuat (CDN jsdelivr, diizinkan CSP); fallback kini strip tag + decode entity dan tidak pernah menyentuh `innerHTML`.
 
 **Tes:** 1 tes baru per-menit (burst diblokir 429, bypass admin, binding absen tidak melempar) + 1 tes gateway diperbarui (kontrak lama "limiter tidak dipanggil untuk chat" diganti "limiter dipanggil sekali"). Suite penuh: **319 tes, 313 lulus, 0 gagal, 6 skipped**.
+
+## 7. Hasil Fase Audit Adaptor Cloud AI (31 Oktober 2026)
+
+**Peta adaptor (diverifikasi dari kode):**
+
+| Provider | Jalur gateway (`gateway.js`) | Jalur langsung (`sendOpenAIRequest`) | Health probe |
+|---|---|---|---|
+| openrouter | ✅ OpenAI-compat | ✅ `OPENAI_ENDPOINTS` | ✅ `probeGatewayProvider` |
+| groq | ✅ OpenAI-compat | ✅ | ✅ |
+| nvidia | ✅ OpenAI-compat | ✅ | ✅ |
+| kimi | ✅ OpenAI-compat (`api.moonshot.cn/v1`) | ✅ | ✅ |
+| claude | ✅ adaptor asli Anthropic (`buildAnthropicBody`, `x-api-key`, header `anthropic-version`) | ❌ tidak ada endpoint OpenAI-compat | ✅ |
+| monid | — (bukan chat; `MONID_API_BASE/discover`) | — | ✅ `probeMonid` |
+| gemini-live | — (token sesi via `auth_tokens`) | — | ✅ `probeGeminiLive` (jujur: "koneksi WebSocket belum diuji") |
+
+**Temuan audit:**
+
+1. **`chat()` (login) meneruskan SEMUA `PROVIDERS` ke gateway** — jalur langsung (`validateChatBody` + `sendOpenAIRequest`) pada route chat pengguna terautentikasi tidak pernah tercapai untuk kelima provider; ia hidup hanya sebagai pembantu route **guest** (guest.js memilih model gratis hanya dari nvidia/groq, fallback openrouter). Ini bukan bug: jalur langsung berfungsi dan diuji, hanya berperan sebagai jalur guest.
+2. **Jalur validasi lama menerima `claude` padahal tidak ada endpoint langsung untuknya** — `FREE_CHAT_PROVIDERS` sebelumnya memuat semua `PROVIDERS`, sehingga `validateChatBody` meloloskan claude untuk kemudian gagal bingung di `sendOpenAIRequest` (tanpa entri `OPENAI_ENDPOINTS`). **Diperbaiki**: `FREE_CHAT_PROVIDERS` kini mengecualikan claude, jadi jalur guest/validasi langsung menolak claude dengan instruksi jelas "gunakan melalui AI gateway" (400) — claude tetap berfungsi penuh lewat gateway. 1 tes baru: `legacy chat validation rejects Claude…` (pola sama dengan tes penolakan gemini yang sudah ada).
+3. **`js/providers.js:839` cabang `modelscope` adalah kode mati** — worker tidak punya dukungan modelscope sama sekali (tidak di `PROVIDERS`, `keys.js`, `OPENAI_ENDPOINTS`, maupun gateway), dan menu model tidak pernah menawarkannya, sehingga cabang frontend itu tidak mungkin tereksekusi. Tidak dihapus pada fase ini sesuai instruksi "tanpa perubahan yang tidak perlu"; diusulkan dibersihkan pada fase Creative Studio (§4 butir 6) bersama pembersihan stub lainnya.
+4. **Alias kunci** (`keys.js`): `anthropic→claude`, `moonshot→kimi`, `nvidia_nim→nvidia` — variabel secret lama tetap dikenali; `PROVIDER_KEY_NAMES` mencakup openrouter/groq/nvidia/claude/kimi/monid/explorium.
+5. **Health check semua probe nyata** (panggilan API asli dengan timeout + pemetaan status → pesan Indonesia yang jujur, termasuk pesan eksplisit untuk keterbatasan monid/gemini-live); health rate-limit 5/menit per akun.
+6. **Keterbatasan jujur**: validitas secret (`OPENROUTER_API_KEY` dll.) tidak dapat diverifikasi dari kode — hanya bisa dibuktikan lewat probe health live atau pemakaian nyata; klaim "key valid" tidak pernah dibuat tanpa bukti.
+
+**Tes:** suite penuh **320 tes, 314 lulus, 0 gagal, 6 skipped**.
 
 **Build & deploy:** Vite build sukses. Worker `8a4ddb8a-65a5-4195-8b14-aa15fdf05bab` + Pages `8e946890` sukses.
 

@@ -51,7 +51,7 @@ export { AI_ROUTE_LIMITS, AIRateLimitStore, EmailActionStore, GuestTrialCounter 
 
 const PROVIDERS = ["openrouter", "groq", "nvidia", "claude", "kimi"];
 const HEALTH_PROVIDER_IDS = [...PROVIDERS, "monid", "gemini-live"];
-const FREE_CHAT_PROVIDERS = new Set(PROVIDERS);
+const FREE_CHAT_PROVIDERS = new Set(PROVIDERS.filter((provider) => provider !== "claude"));
 const OPENAI_ENDPOINTS = {
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
   groq: "https://api.groq.com/openai/v1/chat/completions",
