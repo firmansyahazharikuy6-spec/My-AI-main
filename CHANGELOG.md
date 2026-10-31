@@ -34,6 +34,17 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 
 ---
 
+## Audit produksi V5: perbaikan kuota, dashboard akun, dan paket jujur (31 Oktober 2026)
+
+- **Mesin adaptif menghormati tier:** router adaptif kini memfilter model dengan `isTierAvailable` + `isProviderAllowedForTier` sebelum memilih rute Cloud/WebGPU/Ollama — akun FREE tidak bisa dirutekan diam-diam ke model cloud dan tidak ada model di atas tier akun yang dipilih (sebelumnya `[...models.values()]` dikirim tanpa filter).
+- **Status kuota menghitung device aktif saja:** `GET /api/quota` tidak lagi menghitung perangkat yang idle > 90 hari sebagai perangkat terdaftar; laporan konsisten dengan aturan prune saat registrasi.
+- **Sinyal IP diperiksa sebelum reservasi kuota cloud:** permintaan yang diblokir sinyal IP tidak lagi membakar reservasi chat cloud harian; device heartbeat tetap dicatat.
+- **Dashboard Akun:** dialog baru (dari popover akun atau klik baris "Kuota Hari Ini") menampilkan paket (FREE/ADMIN), pemakaian chat cloud hari ini dengan progress bar, perangkat terdaftar, email admin (khusus admin), dan aksi cepat ke paket engine, 150 kemampuan, serta Download Center.
+- **Copy paket jujur soal kuota (EN + ID):** dialog tier dan kartu FREE menyebut "3 chat cloud/hari + AI lokal tanpa batas"; paket lebih tinggi membuka lebih banyak model cloud.
+- Test regresi kuota bertambah 2 (309 tes, 303 pass, 0 fail). Detail per fase: [docs/AUDIT-V5.md](./docs/AUDIT-V5.md).
+
+---
+
 ## Perbaikan sign-in, terjemahan, dan pipeline gambar di v5.47 (30 Oktober 2026)
 
 - CSP Pages (`pages/_headers`) kini mengizinkan `https://apis.google.com` di `script-src` dan `connect-src` serta `https://accounts.google.com` di `frame-src`, `img-src`, dan `connect-src`. Sebelumnya SDK Firebase Auth memuat GIS `api.js` yang diblokir CSP sehingga login gagal dengan `auth/internal-error`, dan ping `gen_204` Google Identity Services (cek ketersediaan cookie) diblokir `connect-src` sehingga handoff login bisa gagal diam-diam dan pengguna kembali ke halaman depan setelah selesai di Google.

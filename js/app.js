@@ -563,6 +563,117 @@ function showQuotaDialog(error) {
   }
 }
 
+function dashboardSection(title, build) {
+  const section = document.createElement("section");
+  section.className = "dashboard-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  section.append(heading);
+  build(section);
+  return section;
+}
+
+function renderAccountDashboard() {
+  const body = document.getElementById("dashboardBody");
+  if (!body) return;
+  body.replaceChildren();
+  const admin = accountQuota?.admin === true;
+
+  body.append(dashboardSection("Paket", (section) => {
+    const badge = document.createElement("span");
+    badge.className = `dashboard-plan-badge ${admin ? "dashboard-plan-admin" : "dashboard-plan-free"}`;
+    badge.textContent = admin ? "ADMIN — tanpa batas" : "FREE — 3 chat cloud/hari";
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.textContent = admin
+      ? "Akun admin dibebaskan dari kuota chat cloud dan batas perangkat."
+      : "AI Lokal (WebGPU & Ollama) tanpa batas dan gratis. Paket lebih tinggi membuka lebih banyak model cloud.";
+    section.append(badge, note);
+  }));
+
+  if (!accountQuota) {
+    body.append(dashboardSection("Pemakaian", (section) => {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.textContent = "Kuota belum berhasil dimuat.";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "dashboard-retry";
+      retry.textContent = "↻ Muat ulang kuota";
+      retry.onclick = async () => {
+        await refreshAccountQuota();
+        renderAccountDashboard();
+      };
+      section.append(note, retry);
+    }));
+    return;
+  }
+
+  const { chat: chatQuota, devices } = accountQuota;
+  body.append(dashboardSection("Pemakaian Chat Cloud Hari Ini", (section) => {
+    const used = chatQuota?.used ?? 0;
+    const limit = chatQuota?.limit;
+    const row = document.createElement("div");
+    row.className = "dashboard-usage-row";
+    const label = document.createElement("span");
+    label.className = "dashboard-usage-label";
+    label.textContent = "Chat cloud terpakai";
+    const value = document.createElement("span");
+    value.className = "dashboard-usage-value";
+    value.textContent = admin || limit === null || limit === undefined ? "Tanpa batas" : `${used} dari ${limit}`;
+    row.append(label, value);
+    const bar = document.createElement("div");
+    bar.className = "dashboard-usage-bar";
+    const fill = document.createElement("span");
+    const ratio = admin || !Number.isFinite(limit) || limit <= 0 ? 0 : Math.min(1, used / limit);
+    fill.style.width = `${Math.round(ratio * 100)}%`;
+    bar.append(fill);
+    section.append(row, bar);
+  }));
+
+  body.append(dashboardSection("Perangkat Terdaftar", (section) => {
+    const row = document.createElement("div");
+    row.className = "dashboard-usage-row";
+    const label = document.createElement("span");
+    label.className = "dashboard-usage-label";
+    label.textContent = "Perangkat aktif akun ini";
+    const value = document.createElement("span");
+    value.className = "dashboard-usage-value";
+    const count = devices?.count ?? 0;
+    const deviceLimit = devices?.limit;
+    value.textContent = admin || deviceLimit === null || deviceLimit === undefined
+      ? `${count} perangkat`
+      : `${count} dari ${deviceLimit}`;
+    row.append(label, value);
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.textContent = admin
+      ? "Batas perangkat tidak berlaku untuk admin."
+      : "Perangkat yang tidak aktif 90 hari otomatis dibebaskan.";
+    section.append(row, note);
+  }));
+
+  if (admin && Array.isArray(accountQuota.adminEmails) && accountQuota.adminEmails.length) {
+    body.append(dashboardSection("Email Admin MyAI", (section) => {
+      const note = document.createElement("p");
+      note.className = "muted";
+      note.textContent = accountQuota.adminEmails.join(", ");
+      section.append(note);
+    }));
+  }
+}
+
+async function openDashboard() {
+  if (!currentUser) {
+    toast("Masuk dengan akun untuk membuka dashboard MyAI.");
+    return;
+  }
+  renderAccountDashboard();
+  document.getElementById("dashboardDialog")?.showModal();
+  await refreshAccountQuota();
+  renderAccountDashboard();
+}
+
 function providerStatusKey(provider) {
   return String(provider || "unknown").replace(/^gateway-/, "");
 }
@@ -3151,6 +3262,7 @@ function renderAccount(user) {
 
   const quotaRow = document.createElement("div");
   quotaRow.className = "user-quota-row";
+  quotaRow.title = "Buka Dashboard Akun";
   const quotaLabel = document.createElement("span");
   quotaLabel.className = "user-tier-label";
   quotaLabel.textContent = "Kuota Hari Ini";
@@ -3159,6 +3271,21 @@ function renderAccount(user) {
   quotaValue.id = "accountQuotaText";
   quotaValue.textContent = "Chat Cloud: memuat…";
   quotaRow.append(quotaLabel, quotaValue);
+  quotaRow.onclick = () => {
+    popover.classList.add("hidden");
+    trigger.setAttribute("aria-expanded", "false");
+    openDashboard();
+  };
+
+  const dashboardRow = document.createElement("button");
+  dashboardRow.type = "button";
+  dashboardRow.className = "user-popover-item user-dashboard-row";
+  dashboardRow.innerHTML = '<span class="user-popover-icon" aria-hidden="true">📊</span><span class="user-popover-text">Dashboard Akun</span><span class="user-popover-chevron" aria-hidden="true">›</span>';
+  dashboardRow.onclick = () => {
+    popover.classList.add("hidden");
+    trigger.setAttribute("aria-expanded", "false");
+    openDashboard();
+  };
 
   const divider = document.createElement("div");
   divider.className = "user-popover-divider";
@@ -3188,7 +3315,7 @@ function renderAccount(user) {
   logout.onclick = () => signOutUser();
   profileRow.append(profileAvatar, profileName, logout);
 
-  popover.append(personalization, tierRow, quotaRow, divider, profileRow);
+  popover.append(personalization, tierRow, quotaRow, dashboardRow, divider, profileRow);
   box.append(trigger, popover);
 
   const toggleMenu = () => {
@@ -5567,7 +5694,9 @@ async function respond() {
   if (currentUser && adaptiveEngine && m && !imageGeneration && !documentFormat && !webSearch && !latestHasImages) {
     const route = routeAdaptiveModel({
       skillId: last.skillId || "umum",
-      models: [...models.values()],
+      models: [...models.values()]
+        .filter((model) => isTierAvailable(modelTierCategory(model), activeTier))
+        .filter((model) => isProviderAllowedForTier(model.provider, activeTier)),
       cloudRemaining: adaptiveCloudRemaining(),
       webgpuSupported: adaptiveWebGpuSupported(),
       ollamaAvailable: adaptiveOllamaAvailable(),
@@ -7556,6 +7685,19 @@ function bindEvents() {
     $("quotaDialog").close();
     expandedModelProvider = "local-webgpu";
     openModelMenu();
+  };
+  $("closeDashboardDialog").onclick = () => $("dashboardDialog").close();
+  $("dashboardOpenTier").onclick = () => {
+    $("dashboardDialog").close();
+    openTierModal();
+  };
+  $("dashboardOpenCapabilities").onclick = () => {
+    $("dashboardDialog").close();
+    $("openCapabilities").click();
+  };
+  $("dashboardOpenDownload").onclick = () => {
+    $("dashboardDialog").close();
+    openDownloadCenter();
   };
   $("confirmTier").onclick = activateTier;
   window.activateTier = activateTierByName;

@@ -6,6 +6,7 @@ import {
   DEVICE_IDLE_PRUNE_MS,
   IP_CLOUD_CHAT_DAILY_SIGNAL,
   MAX_ACCOUNT_DEVICES,
+  enforceCloudChatQuota,
 } from "./src/rate-limit.js";
 
 function memoryStorage() {
@@ -96,4 +97,72 @@ test("IP abuse signal blocks only after its generous daily threshold", async () 
   assert.equal(second.allowed, true);
   const third = await (await store.fetch(storeRequest(store, "/ip-signal/reserve", { limit: 2 }))).json();
   assert.deepEqual(third, { allowed: false, remaining: 0 });
+});
+
+test("quota status counts only devices seen within the idle prune window", async () => {
+  const store = new AIRateLimitStore({ storage: memoryStorage() });
+  await store.fetch(storeRequest(store, "/device/register", {
+    deviceHash: sha("active-device"),
+    maxDevices: MAX_ACCOUNT_DEVICES,
+    idlePruneMs: DEVICE_IDLE_PRUNE_MS,
+  }));
+  const fresh = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(fresh.deviceCount, 1);
+  const expired = await (await store.fetch(storeRequest(store, "/quota/status", { idlePruneMs: 0 }))).json();
+  assert.equal(expired.deviceCount, 0);
+});
+
+class TestHttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(value)));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function fakeQuotaBinding() {
+  const instances = new Map();
+  const storeFor = (key) => {
+    if (!instances.has(key)) {
+      instances.set(key, new AIRateLimitStore({ storage: memoryStorage() }));
+    }
+    return instances.get(key);
+  };
+  return {
+    idFromName: (name) => ({ name }),
+    get: (id) => {
+      const store = storeFor(String(id?.name ?? id));
+      return { fetch: (url, init) => store.fetch(new Request(url, init)) };
+    },
+    instanceFor: async (name) => storeFor(await sha256Hex(name)),
+  };
+}
+
+test("IP abuse block fires before the cloud chat reservation burns quota", async () => {
+  const binding = fakeQuotaBinding();
+  const user = { sub: "audit-user", email: "audit@example.com", email_verified: true };
+  const ip = "203.0.113.9";
+  const ipStore = await binding.instanceFor(`ip:${ip}`);
+  for (let index = 0; index < IP_CLOUD_CHAT_DAILY_SIGNAL; index += 1) {
+    const result = await (await ipStore.fetch(
+      storeRequest(ipStore, "/ip-signal/reserve", { limit: IP_CLOUD_CHAT_DAILY_SIGNAL }),
+    )).json();
+    assert.equal(result.allowed, true);
+  }
+  const request = new Request("https://ai-daily-rate-limit.internal/chat", {
+    method: "POST",
+    headers: { "x-device-id": "audit-device-0001", "cf-connecting-ip": ip },
+  });
+  await assert.rejects(
+    () => enforceCloudChatQuota(user, { AI_DAILY_RATE_LIMIT_STORE: binding }, request, TestHttpError),
+    (error) => error.code === "IP_ABUSE_SIGNAL" && error.status === 429,
+  );
+  const accountStore = await binding.instanceFor("audit-user");
+  const status = await (await accountStore.fetch(storeRequest(accountStore, "/quota/status", {}))).json();
+  assert.equal(status.chatUsed, 0, "IP-blocked request must not consume cloud chat quota");
+  assert.equal(status.deviceCount, 1, "device heartbeat still registers before the IP check");
 });

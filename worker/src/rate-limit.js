@@ -105,18 +105,6 @@ export async function enforceCloudChatQuota(user, env, request, HttpError) {
     error.code = "DEVICE_LIMIT_EXCEEDED";
     throw error;
   }
-  let reserve;
-  try {
-    reserve = await accountQuotaRequest(stub, "cloud-chat/reserve", { limit: CLOUD_CHAT_DAILY_LIMIT });
-  } catch {
-    throw new HttpError(503, "Kuota chat cloud tidak dapat diperiksa. Coba lagi nanti.");
-  }
-  if (reserve.allowed !== true) {
-    const error = new HttpError(429,
-      `Batas chat cloud harian tercapai (${CLOUD_CHAT_DAILY_LIMIT}/hari untuk paket Free). Upgrade paket atau lanjutkan dengan AI lokal tanpa batas.`);
-    error.code = "CLOUD_QUOTA_EXCEEDED";
-    throw error;
-  }
   const ip = request.headers.get("cf-connecting-ip");
   if (ip && env.AI_DAILY_RATE_LIMIT_STORE) {
     const ipStub = env.AI_DAILY_RATE_LIMIT_STORE.get(
@@ -134,6 +122,18 @@ export async function enforceCloudChatQuota(user, env, request, HttpError) {
       error.code = "IP_ABUSE_SIGNAL";
       throw error;
     }
+  }
+  let reserve;
+  try {
+    reserve = await accountQuotaRequest(stub, "cloud-chat/reserve", { limit: CLOUD_CHAT_DAILY_LIMIT });
+  } catch {
+    throw new HttpError(503, "Kuota chat cloud tidak dapat diperiksa. Coba lagi nanti.");
+  }
+  if (reserve.allowed !== true) {
+    const error = new HttpError(429,
+      `Batas chat cloud harian tercapai (${CLOUD_CHAT_DAILY_LIMIT}/hari untuk paket Free). Upgrade paket atau lanjutkan dengan AI lokal tanpa batas.`);
+    error.code = "CLOUD_QUOTA_EXCEEDED";
+    throw error;
   }
   return { admin: false, remaining: reserve.remaining, limit: CLOUD_CHAT_DAILY_LIMIT };
 }
@@ -345,14 +345,21 @@ export class AIRateLimitStore {
     }
     if (pathname === "/quota/status") {
       const day = new Date().toISOString().slice(0, 10);
+      const idlePruneMs = Number.isSafeInteger(body?.idlePruneMs) && body.idlePruneMs >= 0
+        ? body.idlePruneMs
+        : DEVICE_IDLE_PRUNE_MS;
+      const now = Date.now();
       const [chatUsed, devices] = await Promise.all([
         this.ctx.storage.get(`daily:cloud-chat:${day}`),
         this.ctx.storage.list({ prefix: "device:" }),
       ]);
+      const activeDevices = [...devices.values()].filter((record) => record
+        && typeof record.lastSeen === "number"
+        && now - record.lastSeen < idlePruneMs).length;
       return Response.json({
         chatUsed: chatUsed || 0,
         chatRemaining: Math.max(0, CLOUD_CHAT_DAILY_LIMIT - (chatUsed || 0)),
-        deviceCount: devices.size,
+        deviceCount: activeDevices,
       });
     }
     return new Response("Not found", { status: 404 });

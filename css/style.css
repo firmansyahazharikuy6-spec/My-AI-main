@@ -1890,6 +1890,34 @@ kbd {
 .quota-dialog-btn:hover { background: rgba(255,255,255,.09); }
 .quota-dialog-btn-primary { border-color: transparent; background: var(--accent); color: #04121f; }
 .quota-dialog-btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
+.dashboard-dialog {
+  position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); margin: 0;
+  box-sizing: border-box; width: min(520px, calc(100vw - 32px));
+  padding: 26px; border: 1px solid var(--border); border-radius: 20px;
+  background: var(--panel); color: var(--text); box-shadow: var(--shadow-menu);
+}
+.dashboard-dialog[open] { animation: tier-dialog-open .3s cubic-bezier(.2,.8,.2,1) both; }
+.dashboard-dialog::backdrop { background: rgba(0, 0, 0, .75); backdrop-filter: blur(10px); }
+.dashboard-dialog h2 { margin: 0 24px 10px 0; font-size: clamp(19px, 4vw, 24px); }
+.dashboard-body { display: grid; gap: 12px; margin-bottom: 18px; }
+.dashboard-section { padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel-2, rgba(255,255,255,.05)); }
+.dashboard-section h3 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.dashboard-section .muted { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; }
+.dashboard-plan-badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; }
+.dashboard-plan-free { background: rgba(34, 211, 238, .14); color: #22d3ee; border: 1px solid rgba(34, 211, 238, .4); }
+.dashboard-plan-admin { background: rgba(250, 204, 21, .14); color: #facc15; border: 1px solid rgba(250, 204, 21, .4); }
+.dashboard-usage-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 0; }
+.dashboard-usage-label { color: var(--muted); font-size: 13px; }
+.dashboard-usage-value { font-weight: 700; font-size: 13px; }
+.dashboard-usage-bar { height: 8px; border-radius: 999px; background: var(--border); overflow: hidden; margin-top: 4px; }
+.dashboard-usage-bar > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #22d3ee, #818cf8); }
+.dashboard-retry { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2, rgba(255,255,255,.05)); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.dashboard-retry:hover { background: rgba(255,255,255,.09); }
+.dashboard-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.dashboard-actions .quota-dialog-btn { min-width: 0; }
+.user-quota-row { cursor: pointer; border-radius: 8px; }
+.user-quota-row:hover { background: rgba(255,255,255,.05); }
+.user-dashboard-row { width: 100%; }
 .capability-dialog {
   position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); margin: 0;
   box-sizing: border-box; width: min(860px, calc(100vw - 32px));
