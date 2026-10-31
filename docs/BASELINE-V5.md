@@ -56,7 +56,7 @@ Per §23 prompt (jangan mengarang kebijakan produk; tanya pemilik hanya untuk ke
 ## 4. Rencana Fase (urutan sesuai prompt)
 
 1. ✅ Phase Zero — audit & baseline (dokumen ini).
-2. Keamanan & anti-abuse: idempotensi/refund quota chat cloud (§6.4) + tinjau item Low.
+2. ✅ Keamanan & anti-abuse — selesai 31 Oktober 2026: idempotensi + refund kuota chat cloud (§6.4), batas per-menit chat, dan tinjauan tiga item Low (detail di §6).
 3. ✅ Subscription & quota — **kuota AI Lokal Free 5/hari selesai** (counter independen + idempotensi + konfigurasi `LOCAL_AI_DAILY_LIMIT`). Sisa: sentralisasi penuh definisi entitlement (§6.5) saat integrasi pembayaran nyata.
 4. Cloud AI: verifikasi/audit adaptor, tanpa perubahan yang tidak perlu.
 5. Local AI & routing adaptif: audit rute + label transparan (label "tanpa batas" sudah dikoreksi).
@@ -92,3 +92,37 @@ Per §23 prompt (jangan mengarang kebijakan produk; tanya pemilik hanya untuk ke
 1. Login Google (non-admin) → 5 chat WebGPU/Ollama sukses, chat ke-6 diblokir + dialog kuota lokal muncul, dashboard menampilkan pemakaian AI Lokal.
 2. Login admin (email `AI_ADMIN_EMAILS`) → chat lokal tanpa batas, dashboard menampilkan badge ADMIN tanpa batas.
 3. `GET /api/quota` saat login → memuat `local: {used, limit: 5, remaining}`.
+
+## 6. Hasil Fase Keamanan & Anti-Abuse (31 Oktober 2026)
+
+### 6.1 Idempotensi + refund kuota chat cloud (§6.4)
+
+**Implementasi:**
+- `worker/src/rate-limit.js` — handler DO `/cloud-chat/reserve` kini idempoten (`idempotencyKey` dengan replay TTL 1 jam, namespace `idempotency:cloud:` terpisah dari `idempotency:local:` agar kunci bersama tidak saling mereplay); handler baru `/cloud-chat/release` (transaksi atomik: turunkan counter tepat satu, hapus catatan, no-op bila tidak ada catatan — tidak mungkin double-refund); `enforceCloudChatQuota()` menerima kunci dan mengembalikannya; `releaseCloudChatReservation()` best-effort (tidak pernah melempar — kegagalan refund tidak mengganggu pelaporan error asli).
+- `worker/src/index.js` — chat langsung: validasi body **sebelum** reservasi (permintaan tidak valid tidak membakar kuota); refund saat `sendOpenAIRequest` melempar (koneksi/timeout) atau merespons `>=400` (provider menolak tanpa memproses). Jalur gateway (di `chat()` dan route `/gateway`): refund saat `GatewayError` terlempar sebelum pemrosesan, atau saat `handleGatewayRequest` menandai respons `X-MyAI-No-Billing: 1` (semua percobaan provider gagal).
+- `worker/src/gateway.js` — respons kegagalan total diberi header `X-MyAI-No-Billing: 1`.
+- `js/app.js` + `js/providers.js` — satu `idempotencyKey` per pesan pengguna (UUID 16 heksa) dikirim pada body `chat`/`gateway` dan dipakai juga untuk reservasi lokal; retry/fallback dengan kunci sama tidak membakar kuota ganda.
+
+**Kebijakan refund (konsisten, terdokumentasi):**
+- Reservasi **direfund** bila eksekusi gagal sebelum provider mulai memproses: body tidak valid (sekarang divalidasi sebelum reservasi), provider tidak terjangkau/timeout sebelum respons, provider menolak dengan status error, semua percobaan gateway gagal, atau permintaan dibatalkan sebelum streaming dimulai.
+- Reservasi **tetap terpakai** begitu provider mulai memproses (respons 2xx/streaming dimulai), termasuk bila stream terputus di tengah (sebagian output sudah dihasilkan dan provider menagih).
+- Refund idempoten dan best-effort: kegagalan refund tidak menimbulkan error baru bagi pengguna.
+
+**Tes:** 6 tes baru di `worker/quota.test.js` (replay cloud, refund + re-reserve, no-op/double-refund, konkurensi 5 paralel dengan batas 3 → tepat 3 sukses — storage fake kini menserialisasi transaksi seperti DO asli, isolasi namespace lokal/cloud, refund lewat binding + keheningan saat binding hilang).
+
+### 6.2 Tinjauan tiga item Low baseline
+
+1. **Origin wildcard `*.myai-v3-firmansyah.pages.dev`** — **diterima apa adanya (risiko diterima)**. Subdomain preview hanya dapat dideploy oleh pemilik proyek Pages; login Firebase dibatasi ke origin produksi (daftar authorized domains), sehingga token bearer tidak dapat dicetak dari subdomain preview; CORS tanpa token tidak memberi akses apa pun. Membatasi wildcard akan memutus pengujian pada URL preview tanpa manfaat keamanan nyata.
+2. **Route chat tanpa batas per-menit** — **diperbaiki**. `enforceCloudChatPerMinute()` baru (rate limiter `AI_RATE_LIMITER` 5/menit yang sudah ada, dikunci per akun `chat:<sub>`, bypass admin, no-op bila binding absen agar tidak memutus dev lokal) dipanggil di `chat()` dan route `/gateway` sebelum reservasi harian. Ini juga menutup vektor burst baru yang dibuka refund (percobaan gagal tidak lagi memakan kuota harian, sehingga loop retry bisa menghantam provider tanpa batas per-menit).
+3. **Fallback `documents.js` saat DOMPurify absen** — **diperbaiki**. `plainText()` tidak lagi memasukkan HTML mentah saat DOMPurify gagal dimuat (CDN jsdelivr, diizinkan CSP); fallback kini strip tag + decode entity dan tidak pernah menyentuh `innerHTML`.
+
+**Tes:** 1 tes baru per-menit (burst diblokir 429, bypass admin, binding absen tidak melempar) + 1 tes gateway diperbarui (kontrak lama "limiter tidak dipanggil untuk chat" diganti "limiter dipanggil sekali"). Suite penuh: **319 tes, 313 lulus, 0 gagal, 6 skipped**.
+
+**Build & deploy:** Vite build sukses. Worker `8a4ddb8a-65a5-4195-8b14-aa15fdf05bab` + Pages `8e946890` sukses.
+
+**Verifikasi browser produksi:** aplikasi termuat bersih (hero + composer ada), `GET /api/quota` dan `POST /api/chat` tanpa login tetap 401 (auth ditegakkan sebelum kuota/limiter), tidak ada error console baru.
+
+**Masih butuh verifikasi manual pemilik (akun Google asli):**
+1. Login non-admin → chat cloud ke-1..3 sukses; chat ke-4 diblokir `CLOUD_QUOTA_EXCEEDED`; 6 percobaan chat dalam 1 menit → percobaan ke-6 ditolak 429 per-menit.
+2. Matikan koneksi provider (atau pilih model yang error) → kuota harian tidak berkurang setelah percobaan gagal (refund bekerja).
+3. Double-submit pesan yang sama (mis. klik kirim dua kali cepat) → hanya 1 kuota terpakai (idempotensi).

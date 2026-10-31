@@ -8,7 +8,18 @@ function cleanAnswer(content) {
 
 function plainText(value) {
   const html = globalThis.marked?.parse ? globalThis.marked.parse(value || "") : String(value || "");
-  const safeHtml = globalThis.DOMPurify ? globalThis.DOMPurify.sanitize(html) : html;
+  if (!globalThis.DOMPurify) {
+    return html
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, "\"")
+      .replace(/&#39;/g, "'")
+      .trim();
+  }
+  const safeHtml = globalThis.DOMPurify.sanitize(html);
   if (!globalThis.document?.createElement) {
     return safeHtml.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").trim();
   }

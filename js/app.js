@@ -5813,7 +5813,7 @@ async function respond() {
     return copy;
   };
 
-  const localQuotaIdempotencyKey = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const chatIdempotencyKey = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 
   const reply = {
     id: crypto.randomUUID(),
@@ -5914,12 +5914,13 @@ async function respond() {
       researchMode: requestMode === "research",
       imageGeneration,
       imagePromptContext: "",
+      idempotencyKey: chatIdempotencyKey,
       ...(taskMode === "image" ? { imagePromptPlan } : {}),
     };
     let activeProvider = providerStatusKey(model.provider);
     let activeModel = model.id;
     if (isLocalProvider(model.provider) && currentUser) {
-      await reserveLocalQuota({ idempotencyKey: localQuotaIdempotencyKey, signal: abort.signal });
+      await reserveLocalQuota({ idempotencyKey: chatIdempotencyKey, signal: abort.signal });
     }
     const stream = imageGeneration
       ? model.imageOnly

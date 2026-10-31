@@ -4,6 +4,7 @@ export const EMAIL_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 export const CLOUD_CHAT_DAILY_LIMIT = 3;
 export const LOCAL_AI_DAILY_LIMIT = 5;
 export const LOCAL_RESERVE_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000;
+export const CLOUD_RESERVE_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000;
 export const MAX_ACCOUNT_DEVICES = 5;
 export const IP_CLOUD_CHAT_DAILY_SIGNAL = 200;
 export const DEVICE_IDLE_PRUNE_MS = 90 * 24 * 60 * 60 * 1000;
@@ -92,13 +93,24 @@ export async function getAccountQuotaStatus(user, env) {
   };
 }
 
-export async function enforceCloudChatQuota(user, env, request, HttpError) {
+export async function enforceCloudChatPerMinute(user, env, HttpError) {
+  if (isMaintenanceAdmin(user, env) || !env.AI_RATE_LIMITER) return;
+  const identity = typeof user?.sub === "string" ? user.sub : "";
+  if (!identity) return;
+  const { success } = await env.AI_RATE_LIMITER.limit({ key: `chat:${identity}` });
+  if (!success) {
+    throw new HttpError(429, "Terlalu banyak permintaan chat. Tunggu sebentar lalu coba lagi.");
+  }
+}
+
+export async function enforceCloudChatQuota(user, env, request, HttpError, idempotencyKey = "") {
   if (isMaintenanceAdmin(user, env)) {
-    return { admin: true, remaining: null, limit: null };
+    return { admin: true, remaining: null, limit: null, idempotencyKey: "" };
   }
   if (!env.AI_DAILY_RATE_LIMIT_STORE) {
     throw new HttpError(503, "Penyimpanan kuota chat cloud belum dikonfigurasi di Cloudflare Worker.");
   }
+  const key = /^[A-Za-z0-9-]{8,64}$/.test(String(idempotencyKey || "")) ? idempotencyKey : "";
   const stub = await accountQuotaStub(env, user);
   const rawDeviceId = request.headers.get("x-device-id") || "";
   const deviceHash = await sha256Hex(/^[A-Za-z0-9-]{8,64}$/.test(rawDeviceId) ? rawDeviceId : `legacy:${user.sub}`);
@@ -138,7 +150,10 @@ export async function enforceCloudChatQuota(user, env, request, HttpError) {
   }
   let reserve;
   try {
-    reserve = await accountQuotaRequest(stub, "cloud-chat/reserve", { limit: CLOUD_CHAT_DAILY_LIMIT });
+    reserve = await accountQuotaRequest(stub, "cloud-chat/reserve", {
+      limit: CLOUD_CHAT_DAILY_LIMIT,
+      idempotencyKey: key,
+    });
   } catch {
     throw new HttpError(503, "Kuota chat cloud tidak dapat diperiksa. Coba lagi nanti.");
   }
@@ -148,7 +163,20 @@ export async function enforceCloudChatQuota(user, env, request, HttpError) {
     error.code = "CLOUD_QUOTA_EXCEEDED";
     throw error;
   }
-  return { admin: false, remaining: reserve.remaining, limit: CLOUD_CHAT_DAILY_LIMIT };
+  return { admin: false, remaining: reserve.remaining, limit: CLOUD_CHAT_DAILY_LIMIT, idempotencyKey: key };
+}
+
+export async function releaseCloudChatReservation(user, env, idempotencyKey = "") {
+  const key = /^[A-Za-z0-9-]{8,64}$/.test(String(idempotencyKey || "")) ? idempotencyKey : "";
+  if (!key || isMaintenanceAdmin(user, env) || !env.AI_DAILY_RATE_LIMIT_STORE) {
+    return { released: false };
+  }
+  try {
+    const stub = await accountQuotaStub(env, user);
+    return await accountQuotaRequest(stub, "cloud-chat/release", { idempotencyKey: key });
+  } catch {
+    return { released: false };
+  }
 }
 
 export async function reserveLocalChatQuota(user, env, HttpError, idempotencyKey = "") {
@@ -357,14 +385,55 @@ export class AIRateLimitStore {
       if (!Number.isSafeInteger(body?.limit) || body.limit < 1) {
         return Response.json({ error: "Invalid chat limit" }, { status: 400 });
       }
+      const idempotencyKey = /^[A-Za-z0-9-]{8,64}$/.test(body?.idempotencyKey || "") ? body.idempotencyKey : "";
       const day = new Date().toISOString().slice(0, 10);
       const storageKey = `daily:cloud-chat:${day}`;
+      const now = Date.now();
       const result = await this.ctx.storage.transaction(async (txn) => {
+        if (idempotencyKey) {
+          const replay = await txn.get(`idempotency:cloud:${idempotencyKey}`);
+          if (replay && typeof replay.expiresAt === "number" && replay.expiresAt > now && replay.result) {
+            return replay.result;
+          }
+          const stale = await txn.list({ prefix: "idempotency:cloud:" });
+          for (const [key, record] of stale) {
+            if (record && typeof record.expiresAt === "number" && record.expiresAt <= now) await txn.delete(key);
+          }
+        }
         const used = await txn.get(storageKey) || 0;
-        if (used >= body.limit) return { allowed: false, remaining: 0 };
-        const next = used + 1;
-        await txn.put(storageKey, next);
-        return { allowed: true, remaining: body.limit - next };
+        const outcome = used >= body.limit
+          ? { allowed: false, remaining: 0 }
+          : { allowed: true, remaining: body.limit - used - 1 };
+        if (outcome.allowed) await txn.put(storageKey, used + 1);
+        if (idempotencyKey) {
+          await txn.put(`idempotency:cloud:${idempotencyKey}`, {
+            expiresAt: now + CLOUD_RESERVE_IDEMPOTENCY_TTL_MS,
+            result: outcome,
+          });
+        }
+        return outcome;
+      });
+      return Response.json(result);
+    }
+    if (pathname === "/cloud-chat/release") {
+      const idempotencyKey = /^[A-Za-z0-9-]{8,64}$/.test(body?.idempotencyKey || "") ? body.idempotencyKey : "";
+      if (!idempotencyKey) {
+        return Response.json({ error: "Invalid idempotency key" }, { status: 400 });
+      }
+      const day = new Date().toISOString().slice(0, 10);
+      const storageKey = `daily:cloud-chat:${day}`;
+      const recordKey = `idempotency:cloud:${idempotencyKey}`;
+      const result = await this.ctx.storage.transaction(async (txn) => {
+        const record = await txn.get(recordKey);
+        if (!record || record.result?.allowed !== true) return { released: false };
+        const used = await txn.get(storageKey) || 0;
+        const next = Math.max(0, used - 1);
+        if (next !== used) await txn.put(storageKey, next);
+        await txn.delete(recordKey);
+        const remaining = Number.isSafeInteger(body?.limit) && body.limit >= 1
+          ? Math.max(0, body.limit - next)
+          : undefined;
+        return { released: true, ...(remaining !== undefined ? { remaining } : {}) };
       });
       return Response.json(result);
     }
@@ -378,11 +447,11 @@ export class AIRateLimitStore {
       const now = Date.now();
       const result = await this.ctx.storage.transaction(async (txn) => {
         if (idempotencyKey) {
-          const replay = await txn.get(`idempotency:${idempotencyKey}`);
+          const replay = await txn.get(`idempotency:local:${idempotencyKey}`);
           if (replay && typeof replay.expiresAt === "number" && replay.expiresAt > now && replay.result) {
             return replay.result;
           }
-          const stale = await txn.list({ prefix: "idempotency:" });
+          const stale = await txn.list({ prefix: "idempotency:local:" });
           for (const [key, record] of stale) {
             if (record && typeof record.expiresAt === "number" && record.expiresAt <= now) await txn.delete(key);
           }
@@ -393,7 +462,7 @@ export class AIRateLimitStore {
           : { allowed: true, remaining: body.limit - used - 1 };
         if (outcome.allowed) await txn.put(storageKey, used + 1);
         if (idempotencyKey) {
-          await txn.put(`idempotency:${idempotencyKey}`, {
+          await txn.put(`idempotency:local:${idempotencyKey}`, {
             expiresAt: now + LOCAL_RESERVE_IDEMPOTENCY_TTL_MS,
             result: outcome,
           });

@@ -1419,6 +1419,7 @@ export async function handleGatewayRequest(request, keys, { user, env } = {}) {
           "Content-Type": "text/event-stream; charset=utf-8",
           "Cache-Control": "no-cache, no-transform",
           "X-Accel-Buffering": "no",
+          "X-MyAI-No-Billing": "1",
         },
       });
     }

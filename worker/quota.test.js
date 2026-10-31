@@ -7,12 +7,15 @@ import {
   IP_CLOUD_CHAT_DAILY_SIGNAL,
   LOCAL_AI_DAILY_LIMIT,
   MAX_ACCOUNT_DEVICES,
+  enforceCloudChatPerMinute,
   enforceCloudChatQuota,
+  releaseCloudChatReservation,
   reserveLocalChatQuota,
 } from "./src/rate-limit.js";
 
 function memoryStorage() {
   const values = new Map();
+  let queue = Promise.resolve();
   const storage = {
     get: async (key) => values.get(key),
     put: async (key, value) => values.set(key, value),
@@ -20,7 +23,11 @@ function memoryStorage() {
     list: async ({ prefix = "" } = {}) => new Map(
       [...values].filter(([key]) => key.startsWith(prefix)),
     ),
-    transaction: async (callback) => callback(storage),
+    transaction: async (callback) => {
+      const run = queue.then(() => callback(storage));
+      queue = run.catch(() => {});
+      return run;
+    },
   };
   return storage;
 }
@@ -233,4 +240,156 @@ test("reserveLocalChatQuota enforces the configured limit and bypasses for admin
   assert.equal(adminReserve.admin, true);
   assert.equal(adminReserve.allowed, true);
   assert.equal(adminReserve.limit, null);
+});
+
+test("cloud reserve idempotency key prevents double counting on retries", async () => {
+  const store = new AIRateLimitStore({ storage: memoryStorage() });
+  const reserve = (key) => storeRequest(store, "/cloud-chat/reserve", {
+    limit: CLOUD_CHAT_DAILY_LIMIT,
+    idempotencyKey: key,
+  });
+  const first = await (await store.fetch(reserve("cloud-key-0001"))).json();
+  assert.equal(first.allowed, true);
+  const replay = await (await store.fetch(reserve("cloud-key-0001"))).json();
+  assert.deepEqual(replay, first, "replaying the same key must return the stored result");
+  const fresh = await (await store.fetch(reserve("cloud-key-0002"))).json();
+  assert.equal(fresh.allowed, true);
+  const status = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(status.chatUsed, 2, "replayed reservations must not increment the cloud counter");
+});
+
+test("cloud release refunds the reservation and a later reserve succeeds", async () => {
+  const store = new AIRateLimitStore({ storage: memoryStorage() });
+  const reserve = (key) => storeRequest(store, "/cloud-chat/reserve", {
+    limit: CLOUD_CHAT_DAILY_LIMIT,
+    idempotencyKey: key,
+  });
+  const first = await (await store.fetch(reserve("cloud-key-0001"))).json();
+  assert.equal(first.allowed, true);
+  const statusBefore = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(statusBefore.chatUsed, 1);
+
+  const released = await (await store.fetch(
+    storeRequest(store, "/cloud-chat/release", { idempotencyKey: "cloud-key-0001", limit: CLOUD_CHAT_DAILY_LIMIT }),
+  )).json();
+  assert.equal(released.released, true);
+  assert.equal(released.remaining, CLOUD_CHAT_DAILY_LIMIT);
+  const statusAfter = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(statusAfter.chatUsed, 0, "released reservation must restore the daily counter");
+
+  const again = await (await store.fetch(reserve("cloud-key-0001"))).json();
+  assert.equal(again.allowed, true, "the same key may reserve again after a release");
+});
+
+test("cloud release is a no-op without a matching reservation and cannot double-refund", async () => {
+  const store = new AIRateLimitStore({ storage: memoryStorage() });
+  const reserve = (key) => storeRequest(store, "/cloud-chat/reserve", {
+    limit: CLOUD_CHAT_DAILY_LIMIT,
+    idempotencyKey: key,
+  });
+  const unknown = await (await store.fetch(
+    storeRequest(store, "/cloud-chat/release", { idempotencyKey: "unknown-key-00" }),
+  )).json();
+  assert.equal(unknown.released, false);
+  const status = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(status.chatUsed, 0, "release without a reservation must not change the counter");
+
+  await store.fetch(reserve("cloud-key-0001"));
+  await store.fetch(storeRequest(store, "/cloud-chat/release", { idempotencyKey: "cloud-key-0001" }));
+  const replay = await (await store.fetch(reserve("cloud-key-0001"))).json();
+  assert.equal(replay.allowed, true);
+  await store.fetch(storeRequest(store, "/cloud-chat/release", { idempotencyKey: "cloud-key-0001" }));
+  const secondRelease = await (await store.fetch(
+    storeRequest(store, "/cloud-chat/release", { idempotencyKey: "cloud-key-0001" }),
+  )).json();
+  assert.equal(secondRelease.released, false, "a second release must not double-refund");
+  const finalStatus = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(finalStatus.chatUsed, 0);
+});
+
+test("simultaneous cloud reservations count exactly once per request under concurrency", async () => {
+  const store = new AIRateLimitStore({ storage: memoryStorage() });
+  const reserve = (key) => store.fetch(storeRequest(store, "/cloud-chat/reserve", {
+    limit: CLOUD_CHAT_DAILY_LIMIT,
+    idempotencyKey: key,
+  })).then((response) => response.json());
+  const results = await Promise.all([
+    reserve("parallel-key-01"),
+    reserve("parallel-key-02"),
+    reserve("parallel-key-03"),
+    reserve("parallel-key-04"),
+    reserve("parallel-key-05"),
+  ]);
+  assert.equal(results.filter((result) => result.allowed === true).length, CLOUD_CHAT_DAILY_LIMIT,
+    "exactly the daily limit of parallel reservations may succeed");
+  assert.equal(results.filter((result) => result.allowed === false).length, 2);
+  const status = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(status.chatUsed, CLOUD_CHAT_DAILY_LIMIT,
+    "the counter must reflect each successful reservation exactly once");
+});
+
+test("local and cloud idempotency namespaces never replay each other's results", async () => {
+  const store = new AIRateLimitStore({ storage: memoryStorage() });
+  const sharedKey = "shared-key-0001";
+  const local = await (await store.fetch(storeRequest(store, "/local-chat/reserve", {
+    limit: LOCAL_AI_DAILY_LIMIT,
+    idempotencyKey: sharedKey,
+  }))).json();
+  assert.equal(local.allowed, true);
+  const cloud = await (await store.fetch(storeRequest(store, "/cloud-chat/reserve", {
+    limit: CLOUD_CHAT_DAILY_LIMIT,
+    idempotencyKey: sharedKey,
+  }))).json();
+  assert.equal(cloud.allowed, true, "a key used for local quota must not replay a cloud reservation");
+  const status = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(status.localUsed, 1);
+  assert.equal(status.chatUsed, 1, "both counters must count the shared key independently");
+});
+
+test("releaseCloudChatReservation refunds through the binding and stays quiet on failures", async () => {
+  const binding = fakeQuotaBinding();
+  const user = { sub: "refund-user", email: "refund@example.com", email_verified: true };
+  const env = { AI_DAILY_RATE_LIMIT_STORE: binding };
+  const request = new Request("https://ai-daily-rate-limit.internal/chat", {
+    method: "POST",
+    headers: { "x-device-id": "refund-device-0001" },
+  });
+  const reservation = await enforceCloudChatQuota(user, env, request, TestHttpError, "refund-key-0001");
+  assert.equal(reservation.admin, false);
+  assert.equal(reservation.limit, CLOUD_CHAT_DAILY_LIMIT);
+  assert.equal(reservation.remaining, CLOUD_CHAT_DAILY_LIMIT - 1);
+  assert.equal(reservation.idempotencyKey, "refund-key-0001");
+  const released = await releaseCloudChatReservation(user, env, "refund-key-0001");
+  assert.equal(released.released, true);
+  const store = await binding.instanceFor("refund-user");
+  const status = await (await store.fetch(storeRequest(store, "/quota/status", {}))).json();
+  assert.equal(status.chatUsed, 0, "refund through the worker binding must restore the counter");
+
+  const quiet = await releaseCloudChatReservation(user, {}, "refund-key-0001");
+  assert.equal(quiet.released, false, "missing binding must not throw during refund");
+});
+
+test("chat per-minute limiter blocks bursts but bypasses admins and missing bindings", async () => {
+  let calls = 0;
+  let lastKey = "";
+  const limiter = { limit: async ({ key }) => { calls += 1; lastKey = key; return { success: calls <= 5 }; } };
+  const user = { sub: "burst-user", email: "burst@example.com", email_verified: true };
+  const env = { AI_RATE_LIMITER: limiter };
+  for (let index = 0; index < 5; index += 1) {
+    await enforceCloudChatPerMinute(user, env, TestHttpError);
+  }
+  assert.equal(lastKey, "chat:burst-user", "the limiter must key on the account identity");
+  await assert.rejects(
+    () => enforceCloudChatPerMinute(user, env, TestHttpError),
+    (error) => error.status === 429,
+  );
+
+  const admin = { sub: "admin-user", email: "muhammadfirmansyahashari@gmail.com", email_verified: true };
+  const adminEnv = {
+    AI_ADMIN_EMAILS: "muhammadfirmansyahashari@gmail.com",
+    AI_RATE_LIMITER: { limit: async () => ({ success: false }) },
+  };
+  await enforceCloudChatPerMinute(admin, adminEnv, TestHttpError);
+
+  await enforceCloudChatPerMinute(user, {}, TestHttpError);
 });

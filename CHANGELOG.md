@@ -13,6 +13,17 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 
 ---
 
+## Idempotensi + refund kuota chat cloud, batas per-menit, dan pengamanan dokumen (31 Oktober 2026)
+
+- **Idempotensi kuota chat cloud (§6.4):** `POST /api/chat` dan `/api/gateway` kini menerima `idempotencyKey` (satu kunci per pesan dari frontend); reservasi harian disimpan di DO dengan replay TTL 1 jam sehingga retry/double-submit tidak membakar kuota ganda. Namespace `idempotency:cloud:` terpisah penuh dari `idempotency:local:`.
+- **Refund konsisten:** reservasi chat cloud dikembalikan bila eksekusi gagal sebelum provider memproses (validasi body kini sebelum reservasi; provider tidak terjangkau/timeout; provider menolak dengan status error; semua percobaan gateway gagal — ditandai `X-MyAI-No-Billing`). Reservasi tetap terpakai begitu streaming dimulai, termasuk bila terputus di tengah. Refund idempoten dan best-effort — tidak mungkin double-refund.
+- **Batas per-menit chat:** limiter Cloudflare `AI_RATE_LIMITER` (5/menit) kini juga melindungi route chat (per akun, bypass admin). Menutup vektor burst yang dibuka refund (percobaan gagal tidak memakan kuota harian).
+- **Fallback DOMPurify aman:** ekspor dokumen tidak lagi memasukkan HTML mentah bila DOMPurify gagal dimuat dari CDN; fallback strip tag + decode entity tanpa `innerHTML`.
+- Origin wildcard `*.pages.dev` ditinjau dan diterima apa adanya: preview hanya dapat dideploy pemilik proyek dan login Firebase dibatasi ke origin produksi.
+- Test regresi +8 (319 tes, 313 lulus, 0 gagal). Detail fase: [docs/BASELINE-V5.md](./docs/BASELINE-V5.md) §6.
+
+---
+
 ## Kuota AI Lokal Free 5/hari dengan counter independen dan idempotensi (31 Oktober 2026)
 
 - **Keputusan pemilik produk:** di luar admin hanya berlaku 5x/hari untuk AI Lokal; admin (email `AI_ADMIN_EMAILS`) tanpa batas. Sebelumnya AI Lokal ditampilkan "tanpa batas" untuk semua akun.

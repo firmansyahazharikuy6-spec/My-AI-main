@@ -3501,11 +3501,11 @@ test("authenticated OpenRouter chat counts toward cloud chat quota and uses the 
     FIREBASE_PROJECT_ID: "my-ai-69027",
     AUTHORIZED_EMAILS: "user@example.com",
     OPENROUTER_API_KEY: "openrouter-secret",
-    AI_RATE_LIMITER: { limit: async () => { limiterCalls += 1; return { success: false }; } },
+    AI_RATE_LIMITER: { limit: async () => { limiterCalls += 1; return { success: true }; } },
     AI_DAILY_RATE_LIMIT_STORE: aiDailyRateLimitBinding(true, dailyCalls),
   });
   assert.equal(response.status, 200);
-  assert.equal(limiterCalls, 0);
+  assert.equal(limiterCalls, 1, "the chat route must enforce the per-minute limiter once");
   assert.equal(sentBody.max_tokens, 32_000);
   assert.match(await response.text(), /OpenRouter works/);
   assert.equal(dailyCalls.some((call) => call.limit === CLOUD_CHAT_DAILY_LIMIT), true);

@@ -29,9 +29,11 @@ import {
   EmailActionStore,
   enforceAIRateLimit as applyAIRateLimit,
   enforceCloudChatQuota as applyCloudChatQuota,
+  enforceCloudChatPerMinute as applyCloudChatPerMinute,
   enforceGuestRateLimit as applyGuestRateLimit,
   getAccountQuotaStatus,
   reserveLocalChatQuota,
+  releaseCloudChatReservation as releaseCloudQuota,
   guestTrialCounter as countGuestTrial,
   GuestTrialCounter,
 } from "./rate-limit.js";
@@ -211,7 +213,8 @@ function rejectDisallowedOrigin() {
 }
 
 const enforceAIRateLimit = (user, env, route) => applyAIRateLimit(user, env, route, HttpError);
-const enforceCloudChatQuota = (user, env, request) => applyCloudChatQuota(user, env, request, HttpError);
+const enforceCloudChatQuota = (user, env, request, idempotencyKey) => applyCloudChatQuota(user, env, request, HttpError, idempotencyKey);
+const enforceChatPerMinute = (user, env) => applyCloudChatPerMinute(user, env, HttpError);
 
 async function transcribeAudio(request, keys, user, env) {
   if (request.method !== "POST") throw new HttpError(405, "Gunakan POST untuk mengirim audio.");
@@ -766,33 +769,47 @@ async function chat(request, keys, user, env) {
     : PROVIDERS.includes(requestedProvider)
       ? requestedProvider
       : "";
+  const idempotencyKey = typeof body.idempotencyKey === "string" ? body.idempotencyKey : "";
+  await enforceChatPerMinute(user, env);
   if (gatewayProvider) {
-    await enforceCloudChatQuota(user, env, request);
-    const headers = new Headers(request.headers);
-    headers.delete("Content-Length");
-    const gatewayRequest = new Request(request.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        ...body,
-        metricsStartedAt: startedAt,
-        provider: gatewayProvider,
-        allowFallback: body.allowFallback !== false,
-        messages: withUserPersonalization(body.messages, body.customInstructions),
-      }),
-      signal: request.signal,
-    });
-    return handleGatewayRequest(gatewayRequest, keys, { user, env });
+    const reservation = await enforceCloudChatQuota(user, env, request, idempotencyKey);
+    const refundIfUnprocessed = async () => {
+      if (reservation.idempotencyKey) await releaseCloudQuota(user, env, reservation.idempotencyKey);
+    };
+    try {
+      const headers = new Headers(request.headers);
+      headers.delete("Content-Length");
+      const gatewayRequest = new Request(request.url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ...body,
+          metricsStartedAt: startedAt,
+          provider: gatewayProvider,
+          allowFallback: body.allowFallback !== false,
+          messages: withUserPersonalization(body.messages, body.customInstructions),
+        }),
+        signal: request.signal,
+      });
+      const gatewayResponse = await handleGatewayRequest(gatewayRequest, keys, { user, env });
+      if (gatewayResponse.headers.get("x-myai-no-billing") === "1") await refundIfUnprocessed();
+      return gatewayResponse;
+    } catch (error) {
+      await refundIfUnprocessed();
+      throw error;
+    }
   }
-  await enforceCloudChatQuota(user, env, request);
   const input = {
     ...await validateChatBody(body, keys, outputTokenLimitForUser(user, env)),
     startedAt,
   };
+  const reservation = await enforceCloudChatQuota(user, env, request, idempotencyKey);
   const key = keys[input.provider];
+  let response;
   try {
-    return await sendOpenAIRequest(request, input, key);
+    response = await sendOpenAIRequest(request, input, key);
   } catch (error) {
+    if (reservation.idempotencyKey) await releaseCloudQuota(user, env, reservation.idempotencyKey);
     const status = Number.isInteger(error?.status) ? error.status : 502;
     const message = error instanceof HttpError
       ? error.message
@@ -800,6 +817,10 @@ async function chat(request, keys, user, env) {
     if (status >= 500) console.error("AI chat upstream failed:", error?.name || "Error");
     return streamErrorResponse(message, status);
   }
+  if (response.status >= 400 && reservation.idempotencyKey) {
+    await releaseCloudQuota(user, env, reservation.idempotencyKey);
+  }
+  return response;
 }
 
 function parseVisionImage(image) {
@@ -1846,19 +1867,31 @@ export default {
         if (!MODEL_MENU_PROVIDERS.includes(body.provider)) {
           throw new HttpError(400, "Provider gateway harus merupakan provider chat yang didukung.");
         }
-        await enforceCloudChatQuota(user, env, request);
-        const headers = new Headers(request.headers);
-        headers.delete("Content-Length");
-        const gatewayRequest = new Request(request.url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            ...body,
-            messages: withUserPersonalization(body.messages, body.customInstructions),
-          }),
-          signal: request.signal,
-        });
-        return await handleGatewayRequest(gatewayRequest, keys, { user, env });
+        await enforceChatPerMinute(user, env);
+        const reservation = await enforceCloudChatQuota(user, env, request,
+          typeof body?.idempotencyKey === "string" ? body.idempotencyKey : "");
+        const refundIfUnprocessed = async () => {
+          if (reservation.idempotencyKey) await releaseCloudQuota(user, env, reservation.idempotencyKey);
+        };
+        try {
+          const headers = new Headers(request.headers);
+          headers.delete("Content-Length");
+          const gatewayRequest = new Request(request.url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              ...body,
+              messages: withUserPersonalization(body.messages, body.customInstructions),
+            }),
+            signal: request.signal,
+          });
+          const gatewayResponse = await handleGatewayRequest(gatewayRequest, keys, { user, env });
+          if (gatewayResponse.headers.get("x-myai-no-billing") === "1") await refundIfUnprocessed();
+          return gatewayResponse;
+        } catch (error) {
+          await refundIfUnprocessed();
+          throw error;
+        }
       }
       if (pathSegments.slice(-2).join("/") === "live/token") {
         await enforceAIRateLimit(user, env, "live-token");

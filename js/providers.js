@@ -749,6 +749,7 @@ async function* gatewayStream(provider, model, messages, opts, signal) {
     promptHelper: opts.promptHelper === true && provider === "groq",
     customInstructions: opts.customInstructions,
     allowFallback: true,
+    idempotencyKey: opts.idempotencyKey,
   });
   if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) {
     throw new Error("Permintaan AI gateway maksimal 4 MiB. Hapus beberapa lampiran atau mulai chat baru.");
@@ -816,6 +817,7 @@ async function* serverStream(provider, model, messages, opts, signal) {
     webSearch: opts.webSearch,
     researchMode: opts.researchMode,
     customInstructions: opts.customInstructions,
+    idempotencyKey: opts.idempotencyKey,
   });
   if (new TextEncoder().encode(body).byteLength > 4 * 1024 * 1024) {
     throw new Error("Permintaan online maksimal 4 MiB. Hapus beberapa lampiran atau lanjutkan chat baru.");
