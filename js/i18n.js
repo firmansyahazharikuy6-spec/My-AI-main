@@ -2,7 +2,7 @@ const LANGUAGE_KEY = "myai_selected_lang";
 let activeLanguage = "en";
 const TIER_UI_TRANSLATIONS = {
   en: {
-    tierEyebrow: "MYAI ENGINE SELECTOR", tierDialogTitle: "Choose your AI engine",
+    tierPickerTitle: "AI engine", tierEyebrow: "MYAI ENGINE SELECTOR", tierDialogTitle: "Choose your AI engine",
     tierDialogCopy: "Choose a model tier; this only changes model access. Provider rates and quotas still apply.", tierActive: "Status: Active",
     tierReady: "Status: Ready", tierSelected: "Status: Selected", tierConfirm: "🚀 Activate engine",
     tierFreeFeature0: "Basic-access models; provider charges may apply", tierFreeFeature1: "Basic chat and image creation", tierFreeFeature2: "Great for everyday tasks",
@@ -18,7 +18,7 @@ const TIER_UI_TRANSLATIONS = {
     promptSuggestionDescription: "Choose the clearest prompt for your goal. It will replace your draft and remains editable.",
   },
   id: {
-    tierEyebrow: "PEMILIH ENGINE MYAI", tierDialogTitle: "Pilih engine AI",
+    tierPickerTitle: "Engine AI", tierEyebrow: "PEMILIH ENGINE MYAI", tierDialogTitle: "Pilih engine AI",
     tierDialogCopy: "Tier hanya mengatur akses model; tarif dan kuota provider tetap berlaku.", tierActive: "Status: Aktif",
     tierReady: "Status: Siap", tierSelected: "Status: Dipilih", tierConfirm: "🚀 Aktifkan engine",
     tierFreeFeature0: "Model akses dasar; tarif provider dapat berlaku", tierFreeFeature1: "Chat dan pembuatan gambar dasar", tierFreeFeature2: "Cocok untuk kebutuhan harian",
@@ -34,7 +34,7 @@ const TIER_UI_TRANSLATIONS = {
     promptSuggestionDescription: "Pilih prompt yang paling jelas untuk tujuanmu. Pilihan akan mengganti draft dan tetap bisa diedit.",
   },
   es: {
-    tierEyebrow: "SELECTOR DE MOTOR MYAI", tierDialogTitle: "Elige tu motor de IA",
+    tierPickerTitle: "Motor de IA", tierEyebrow: "SELECTOR DE MOTOR MYAI", tierDialogTitle: "Elige tu motor de IA",
     tierDialogCopy: "El nivel solo cambia el acceso a modelos; pueden aplicarse tarifas y cuotas del proveedor.", tierActive: "Estado: Activo",
     tierReady: "Estado: Listo", tierSelected: "Estado: Seleccionado", tierConfirm: "🚀 Activar motor",
     tierFreeFeature0: "Modelos de acceso básico; pueden aplicarse cargos del proveedor", tierFreeFeature1: "Chat e imágenes básicas", tierFreeFeature2: "Para tareas diarias",
