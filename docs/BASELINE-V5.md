@@ -60,7 +60,7 @@ Per §23 prompt (jangan mengarang kebijakan produk; tanya pemilik hanya untuk ke
 3. ✅ Subscription & quota — **kuota AI Lokal Free 5/hari selesai** (counter independen + idempotensi + konfigurasi `LOCAL_AI_DAILY_LIMIT`). Sisa: sentralisasi penuh definisi entitlement (§6.5) saat integrasi pembayaran nyata.
 4. ✅ Cloud AI: audit adaptor selesai 31 Oktober 2026 (detail di §7).
 5. ✅ Local AI & routing adaptif: audit selesai 31 Oktober 2026 (detail di §8).
-6. Creative Studio: pembersihan stub, batas antar-engine.
+6. ✅ Creative Studio: audit pembersihan stub selesai 31 Oktober 2026 (detail di §9).
 7. Image Engine: §10 (intent, preservasi referensi, evaluasi vision + retry terbatas).
 8. Presentation Engine: §11.
 9. Video Engine: §12 (dokumentasi kejujuran).
@@ -164,6 +164,31 @@ Per §23 prompt (jangan mengarang kebijakan produk; tanya pemilik hanya untuk ke
 5. **Tiering**: matriks visibilitas tier tetap seperti yang diverifikasi pada sesi sebelumnya (FREE hanya model lokal, trial hanya Llama Lite, login Google membuka semua model + tombol unduh semua) — tidak diubah fase ini.
 
 **Tes:** `engine-router`, `local-ai`, `tiering`, `task-routing` — 23/23 lulus.
+
+## 9. Hasil Fase Creative Studio — Pembersihan Stub (31 Oktober 2026)
+
+**Peta mesin kreasi (semua jalur diverifikasi nyata):**
+
+| Mesin | Implementasi | Status |
+|---|---|---|
+| Gambar | `POST /api/images/generate` → Image API OpenRouter khusus (`google/gemini-2.5-flash-image`, tanpa panggilan Google API), antrean edit foto DO dengan polling status + cancel + laporan kuota | ✅ nyata |
+| Presentasi | ekspor PPTX in-browser (pptxgenjs, 6 tema) + **Canva Connect nyata** (`worker/src/canva.ts`: OAuth lengkap, token store KV, refresh+retry saat 401, autofill Brand Template, polling job ekspor, error bertipe, rate limit 5/menit) — `CANVA_BRAND_TEMPLATE_ID` terkonfigurasi di wrangler.toml | ✅ nyata |
+| Word/Excel/PDF | perakitan in-browser nyata (docx, xlsx-js-style, jspdf) dengan validasi skema + perbaikan JSON | ✅ nyata |
+| Email | nyata (Resend via Worker, DO harian per UID, validasi pratinjau) | ✅ nyata |
+| File tools | konversi nyata (PDF↔gambar, Excel→outline PPT→Canva, merge/split PDF) | ✅ nyata |
+| Suara/video | Gemini Live nyata (probe token sesi jujur) | ✅ nyata |
+
+**Pembersihan stub:**
+
+1. **Cabang `modelscope` di `js/providers.js` dihapus** — kode mati yang tidak mungkin tereksekusi (provider tidak pernah muncul dari katalog/keys; ditemukan pada fase §7). Alur SSE normal kini satu-satunya jalur untuk semua provider online.
+2. **Guard 410 `generateImageChat()` di Worker dipertahankan** — ini batas jujur antar-engine, bukan stub: permintaan gambar lama yang masuk ke `/api/chat` ditolak dengan instruksi yang benar (jalur gambar nyata ada di `/api/images/generate`). Menghapusnya justru akan membuat permintaan gambar salah-rute diproses sebagai chat biasa.
+3. **Guard frontend dipertahankan** — `streamChat` menolak `imageGeneration` dan provider `gemini`/`gateway-gemini` langsung dengan pesan jujur; ini batas antar-engine yang mencegah klaim fitur palsu, bukan stub.
+4. **Klaim instruksi PPT "ekspor melalui Canva Connect API di server" diverifikasi benar** — jalur Canva nyata dan teruji (4 tes canva + tes proxy Pages), tidak ada klaim palsu yang perlu dikoreksi.
+
+**Diteruskan ke fase selanjutnya (bukan bagian fase ini):**
+
+- Kartu katalog 150 kemampuan masih informasional (tanpa klik) — keputusan pemilik §3 butir 2 dieksekusi pada fase §13.
+- Download Center Mobile/Desktop berlabel jujur "SEGERA HADIR" — diverifikasi pada fase §14.
 
 **Build & deploy:** Vite build sukses. Worker `8a4ddb8a-65a5-4195-8b14-aa15fdf05bab` + Pages `8e946890` sukses.
 

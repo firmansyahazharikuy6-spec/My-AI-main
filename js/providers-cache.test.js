@@ -331,26 +331,6 @@ test("image prompt enhancement preserves metadata for every supported cloud prov
   assert.equal(result.enhancerModel, "llama-3.1-8b-instant");
 });
 
-test("REST model responses forward provider-reported token usage", async (context) => {
-  setFetch(context, async (url) => {
-    assert.match(url, /\/chat$/);
-    return Response.json({
-      choices: [{ message: { content: "Answer" } }],
-      usage: { prompt_tokens: 35, completion_tokens: 7, total_tokens: 42 },
-    });
-  });
-
-  const chunks = [];
-  for await (const chunk of streamChat("modelscope", "test-model", [
-    { role: "user", content: "test" },
-  ], { authToken: "test-token" })) chunks.push(chunk);
-
-  assert.deepEqual(chunks, [
-    { usage: { promptTokens: 35, completionTokens: 7, totalTokens: 42 } },
-    { content: "Answer" },
-  ]);
-});
-
 test("performance analytics preference defaults on and persists when turned off", () => {
   const oldStorage = globalThis.localStorage;
   const storage = new MemoryStorage();

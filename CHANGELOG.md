@@ -13,6 +13,13 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 
 ---
 
+## Pembersihan stub Creative Studio (31 Oktober 2026)
+
+- **Hapus cabang `modelscope` mati** di `js/providers.js` — kode lama untuk respons JSON non-SSE yang tidak mungkin tereksekusi (worker tidak pernah punya provider modelscope); semua provider online kini memakai jalur streaming yang sama. Tes REST terkait dihapus karena cakupannya sudah terwakili tes SSE usage-forwarding.
+- **Audit mesin kreasi** (gambar, presentasi, Word/Excel/PDF, email, file tools, suara/video) — semua jalur nyata dan teruji; guard jujur antar-engine dipertahankan (gambar via `/api/images/generate`, Canva Connect nyata dengan OAuth+autofill+ekspor). Detail di `docs/BASELINE-V5.md` §9.
+
+---
+
 ## Audit Local AI & routing adaptif (31 Oktober 2026)
 
 - **Router adaptif kini mengenali Claude & Kimi gateway sebagai mesin cloud** — `gateway-claude`/`gateway-kimi` sebelumnya diklasifikasikan "other" (label tanpa awalan "Cloud ·" dan disortir paling akhir); sekarang masuk klasifikasi cloud dengan label transparan.

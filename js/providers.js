@@ -836,18 +836,6 @@ async function* serverStream(provider, model, messages, opts, signal) {
   }, { baseUrl: apiBase });
   if (!response.ok) throw new Error(await errorText(response));
 
-  if (provider === "modelscope") {
-    const result = await response.json();
-    const content = result.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
-      throw new Error("ModelScope tidak mengembalikan teks jawaban yang valid.");
-    }
-    const usage = result.usage || result.usageMetadata;
-    if (usage) yield { usage: normalizeUsage(usage) };
-    yield { content };
-    return;
-  }
-
   if (!response.body) throw new Error("Backend AI tidak mengembalikan aliran jawaban.");
   for await (const result of readSSE(response, opts.requestGuard)) {
     if (result.error) throw new Error(result.error.message || "Error dari server provider.");
