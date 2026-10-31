@@ -18,6 +18,8 @@ const CLOUD_PROVIDERS = new Set([
   "gateway-nvidia",
   "gateway-groq",
   "gateway-openrouter",
+  "gateway-claude",
+  "gateway-kimi",
 ]);
 
 export function classifyEngineProvider(provider) {
@@ -105,8 +107,8 @@ export function engineRouteLabel(model, { cloudRemaining = 0 } = {}) {
       ? `Cloud · ${model?.name || model?.id || "model cloud"} (kuota tersisa ${cloudRemaining})`
       : `Cloud · ${model?.name || model?.id || "model cloud"}`;
   }
-  if (kind === ENGINE_KINDS.webgpu) return "AI Lokal · WebGPU (tanpa internet)";
-  if (kind === ENGINE_KINDS.ollama) return "AI Lokal · Ollama (tanpa internet)";
+  if (kind === ENGINE_KINDS.webgpu) return "AI Lokal · WebGPU (di perangkat)";
+  if (kind === ENGINE_KINDS.ollama) return "AI Lokal · Ollama (di perangkat)";
   return model?.name || model?.id || "Model";
 }
 

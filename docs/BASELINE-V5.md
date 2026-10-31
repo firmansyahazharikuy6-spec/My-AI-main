@@ -59,7 +59,7 @@ Per §23 prompt (jangan mengarang kebijakan produk; tanya pemilik hanya untuk ke
 2. ✅ Keamanan & anti-abuse — selesai 31 Oktober 2026: idempotensi + refund kuota chat cloud (§6.4), batas per-menit chat, dan tinjauan tiga item Low (detail di §6).
 3. ✅ Subscription & quota — **kuota AI Lokal Free 5/hari selesai** (counter independen + idempotensi + konfigurasi `LOCAL_AI_DAILY_LIMIT`). Sisa: sentralisasi penuh definisi entitlement (§6.5) saat integrasi pembayaran nyata.
 4. ✅ Cloud AI: audit adaptor selesai 31 Oktober 2026 (detail di §7).
-5. Local AI & routing adaptif: audit rute + label transparan (label "tanpa batas" sudah dikoreksi).
+5. ✅ Local AI & routing adaptif: audit selesai 31 Oktober 2026 (detail di §8).
 6. Creative Studio: pembersihan stub, batas antar-engine.
 7. Image Engine: §10 (intent, preservasi referensi, evaluasi vision + retry terbatas).
 8. Presentation Engine: §11.
@@ -142,6 +142,28 @@ Per §23 prompt (jangan mengarang kebijakan produk; tanya pemilik hanya untuk ke
 6. **Keterbatasan jujur**: validitas secret (`OPENROUTER_API_KEY` dll.) tidak dapat diverifikasi dari kode — hanya bisa dibuktikan lewat probe health live atau pemakaian nyata; klaim "key valid" tidak pernah dibuat tanpa bukti.
 
 **Tes:** suite penuh **320 tes, 314 lulus, 0 gagal, 6 skipped**.
+
+## 8. Hasil Fase Audit Local AI & Routing Adaptif (31 Oktober 2026)
+
+**Peta implementasi lokal (diverifikasi dari kode):**
+
+| Area | Implementasi | Status |
+|---|---|---|
+| WebGPU | `js/local-ai.js` — `@mlc-ai/web-llm`, 60+ model prebuilt, cache mesin per model, progres unduhan, interrupt saat abort, guest hanya Llama 3.2 1B Lite | ✅ nyata |
+| Ollama | `js/local-ai.js` — endpoint wajib loopback (validasi ketat: protokol, hostname, tanpa path/kredensial), timeout 30 detik, streaming NDJSON, daftar model `/api/tags` | ✅ nyata |
+| Kuota lokal | reservasi atomik 5/hari non-admin (fase sebelumnya) + gate frontend sebelum inferensi | ✅ nyata |
+| Router adaptif | `js/engine-router.js` — klasifikasi engine, pemetaan skill→kemampuan, skor kecocokan model, urutan cloud→WebGPU→Ollama dengan label rute transparan | ✅ nyata |
+| Fallback provider | `js/task-routing.js` — circuit breaker (3 gagal → cooldown 60 dtk), maks 4 percobaan, tidak pernah mencoba ulang provider sama | ✅ nyata |
+
+**Temuan & perbaikan:**
+
+1. **`gateway-claude` dan `gateway-kimi` tidak dikenali sebagai mesin cloud** — `CLOUD_PROVIDERS` di `engine-router.js` belum memuat keduanya padahal katalog nyata (`shared/model-catalog.js` `MODEL_MENU_PROVIDERS`) menyediakannya untuk pengguna login. Akibatnya model Claude/Kimi lewat gateway diklasifikasikan "other": diberi label tanpa awalan "Cloud ·" dan disortir paling akhir oleh router adaptif. **Diperbaiki**: keduanya ditambahkan ke `CLOUD_PROVIDERS`; 2 asersi baru di `engine-router.test.js`.
+2. **Label "tanpa internet" menyesatkan** — label rute "AI Lokal · WebGPU (tanpa internet)" menyiratkan tanpa internet sejak awal, padahal unduhan model pertama butuh internet. **Diperbaiki** menjadi "(di perangkat)" untuk WebGPU dan Ollama — jujur dan tetap singkat.
+3. **Input router adaptif semuanya nyata**: `adaptiveCloudRemaining()` membaca sisa kuota dari `GET /api/quota` (admin → tak terbatas), `adaptiveWebGpuSupported()` mengecek `navigator.gpu` asli, `adaptiveOllamaAvailable()` mengecek katalog model yang benar-benar termuat dari `/api/tags` Ollama. Tidak ada deteksi palsu.
+4. **Keterbatasan jujur**: WebGPU menolak lampiran gambar (belum didukung runtime lokal); Ollama menolak gambar dengan pesan eksplisit; error lokal selalu dalam Bahasa Indonesia dengan langkah perbaikan (OLLAMA_ORIGINS, dll.). Dukungan vision lokal dicatat sebagai belum ada, bukan disembunyikan.
+5. **Tiering**: matriks visibilitas tier tetap seperti yang diverifikasi pada sesi sebelumnya (FREE hanya model lokal, trial hanya Llama Lite, login Google membuka semua model + tombol unduh semua) — tidak diubah fase ini.
+
+**Tes:** `engine-router`, `local-ai`, `tiering`, `task-routing` — 23/23 lulus.
 
 **Build & deploy:** Vite build sukses. Worker `8a4ddb8a-65a5-4195-8b14-aa15fdf05bab` + Pages `8e946890` sukses.
 

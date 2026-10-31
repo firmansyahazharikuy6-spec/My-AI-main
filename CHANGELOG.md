@@ -13,6 +13,14 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 
 ---
 
+## Audit Local AI & routing adaptif (31 Oktober 2026)
+
+- **Router adaptif kini mengenali Claude & Kimi gateway sebagai mesin cloud** — `gateway-claude`/`gateway-kimi` sebelumnya diklasifikasikan "other" (label tanpa awalan "Cloud ·" dan disortir paling akhir); sekarang masuk klasifikasi cloud dengan label transparan.
+- **Label rute lokal lebih jujur** — "AI Lokal · WebGPU/Ollama (tanpa internet)" diganti "(di perangkat)" karena unduhan model pertama tetap butuh internet.
+- Audit penuh implementasi lokal (WebGPU web-llm, Ollama loopback-only, circuit breaker fallback, input router dari kuota/navigator.gpu/katalog Ollama yang nyata) terdokumentasi di `docs/BASELINE-V5.md` §8.
+
+---
+
 ## Audit adaptor Cloud AI (31 Oktober 2026)
 
 - **Audit adaptor lengkap** (lihat `docs/BASELINE-V5.md` §7): kelima provider (`openrouter`, `groq`, `nvidia`, `claude`, `kimi`) punya adaptor gateway nyata (claude via adaptor asli Anthropic); probe health semua endpoint nyata (monid & gemini-live jujur soal keterbatasannya); tidak ada adaptor mati di worker.

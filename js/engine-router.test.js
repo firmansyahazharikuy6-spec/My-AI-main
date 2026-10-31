@@ -21,6 +21,8 @@ const noChat = { provider: "gateway-groq", id: "whisper-large-v3", name: "Whispe
 test("classifies providers into cloud, webgpu, ollama, and guest engines", () => {
   assert.equal(classifyEngineProvider("gateway-groq"), "cloud");
   assert.equal(classifyEngineProvider("openrouter"), "cloud");
+  assert.equal(classifyEngineProvider("gateway-claude"), "cloud");
+  assert.equal(classifyEngineProvider("gateway-kimi"), "cloud");
   assert.equal(classifyEngineProvider("local-webgpu"), "webgpu");
   assert.equal(classifyEngineProvider("local-ollama"), "ollama");
   assert.equal(classifyEngineProvider("guest"), "guest");
