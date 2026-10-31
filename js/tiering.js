@@ -8,8 +8,8 @@ export const TIER_CARDS = [
     theme: "cyan",
     status: "Aktif",
     button: "Gunakan paket Free",
-    features: ["Akses model dasar termasuk NVIDIA NIM", "Chat dan pembuatan gambar dasar", "Kuota/biaya mengikuti provider aktif"],
-    models: [{ name: "NVIDIA NIM dasar", logo: "▣" }, { name: "Gemini Flash / Groq", logo: "⚡" }, { name: "OpenRouter Free", logo: "◎" }],
+    features: ["Model AI lokal di perangkat (WebGPU & Ollama)", "Chat dan pembuatan gambar dasar", "Kuota/biaya mengikuti provider aktif"],
+    models: [{ name: "WebGPU Lokal", logo: "▣" }, { name: "Ollama Lokal", logo: "⚡" }],
   },
   {
     id: "basic",
@@ -67,5 +67,7 @@ export function saveActiveTier(tier) {
 export function isTierAvailable(modelTier, activeTier = getActiveTier()) {
   const modelRank = TIER_ORDER.indexOf(String(modelTier || "").toLowerCase());
   const activeRank = TIER_ORDER.indexOf(String(activeTier || "").toLowerCase());
-  return modelRank >= 0 && activeRank >= 0 && modelRank <= activeRank;
+  if (modelRank < 0 || activeRank < 0) return false;
+  if (activeRank >= 2) return modelRank <= activeRank;
+  return modelRank === activeRank;
 }

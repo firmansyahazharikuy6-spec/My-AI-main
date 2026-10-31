@@ -3205,7 +3205,7 @@ function explainAIError(error) {
   if (/quota|billing|expired|payment required|insufficient balance/i.test(message)) {
     return "Kuota, saldo, atau masa layanan provider habis. Pilih provider lain untuk mencoba ulang.";
   }
-  if (/failed to fetch|networkerror|load failed|gateway tidak dapat dijangkau|route cloudflare worker|worker.{0,35}(?:tidak dapat dijangkau|tidak aktif|not reachable)|connection refused|econnrefused|proxy error|could not proxy|127\.0\.0\.1:8787/i.test(message)) {
+  if (!/webgpu/i.test(message) && /failed to fetch|networkerror|load failed|gateway tidak dapat dijangkau|route cloudflare worker|worker.{0,35}(?:tidak dapat dijangkau|tidak aktif|not reachable)|connection refused|econnrefused|proxy error|could not proxy|127\.0\.0\.1:8787/i.test(message)) {
     return "Worker lokal tidak dapat dijangkau. Pastikan `npm run worker:dev` berjalan di port 8787 dan Vite tetap memakai port 4173.";
   }
   if (/cors/i.test(message)) return "Browser memblokir koneksi ke Cloudflare Worker. Periksa URL Worker dan pengaturan CORS.";
@@ -3365,6 +3365,11 @@ const OLLAMA_MODELS_CACHE_KEY = "myai_ollama_models_v1";
 function isLocalProvider(provider) {
   const normalized = canonicalModelProvider(provider);
   return normalized === "local-webgpu" || normalized === "local-ollama";
+}
+
+function isProviderAllowedForTier(provider, tier = activeTier) {
+  if (tier !== "free") return true;
+  return isLocalProvider(provider);
 }
 
 function cachedOllamaModelGroup() {
@@ -3609,15 +3614,15 @@ function shouldUseSavedModel(modelKey, available) {
 }
 
 function modelGroupsForTask(mode = taskMode, includeLocked = false) {
-  const visibleGroups = filterModelGroupsForMenu(modelGroups);
+  const visibleGroups = filterModelGroupsForMenu(modelGroups)
+    .filter((group) => isProviderAllowedForTier(group.provider));
   const chatGroups = visibleGroups
     .filter((group) => group.provider !== "openrouter-image")
     .map((group) => ({
       ...group,
       models: group.models.filter((model) => includeLocked
         || (!model.imageOnly && model.chatSupport !== false
-          && (isOpenRouterProvider(group.provider)
-            || isTierAvailable(modelTierCategory(model, group), activeTier)))),
+          && isTierAvailable(modelTierCategory(model, group), activeTier))),
     }))
     .filter((group) => group.models.length);
   if (mode === "image") {
@@ -3638,8 +3643,7 @@ function modelGroupsForTask(mode = taskMode, includeLocked = false) {
       ? groups
       : groups.map((group) => ({
         ...group,
-        models: group.models.filter((model) => isOpenRouterProvider(group.provider)
-          || isTierAvailable(modelTierCategory(model, group), activeTier)),
+        models: group.models.filter((model) => isTierAvailable(modelTierCategory(model, group), activeTier)),
       })).filter((group) => group.models.length);
   }
   if (mode === "coding") {
@@ -3909,7 +3913,7 @@ function renderModelList() {
   const list = $("modelList");
   list.replaceChildren();
   let count = 0;
-  const visibleGroups = modelGroupsForTask(taskMode, true);
+  const visibleGroups = modelGroupsForTask(taskMode, false);
   if (currentUser && serverCatalogErrors.length) {
     const warning = document.createElement("div");
     warning.className = "model-empty";
@@ -4105,7 +4109,7 @@ function renderModelList() {
         text.append(name);
         const tier = modelTierCategory(model, group);
         const openRouterModel = isOpenRouterProvider(group.provider);
-        const tierAvailable = openRouterModel || isTierAvailable(tier, activeTier);
+        const tierAvailable = isTierAvailable(tier, activeTier);
         const taskSupported = taskMode === "image"
           ? group.provider === "openrouter" && model.imageOnly === true
             && model.id === "google/gemini-2.5-flash-image"
@@ -4174,7 +4178,11 @@ function renderModelList() {
 function selectModel(value) {
   if (!models.has(value)) return;
   const model = models.get(value);
-  if (!modelIsOpenRouter(model) && !isTierAvailable(modelTierCategory(model), activeTier)) {
+  if (!isProviderAllowedForTier(model.provider, activeTier)) {
+    toast("Paket FREE hanya menampilkan model AI lokal (WebGPU & Ollama).");
+    return;
+  }
+  if (!isTierAvailable(modelTierCategory(model), activeTier)) {
     toast(`Model ini memerlukan paket ${modelTierCategory(model).toUpperCase()}.`);
     return;
   }
@@ -5303,6 +5311,8 @@ async function respond() {
     const visionPriority = ["gateway-nvidia", "nvidia", "gateway-groq", "groq"];
     const vision = [...models.values()]
       .filter((model) => supportsImages(model) && !isPaidModel(model))
+      .filter((model) => isTierAvailable(modelTierCategory(model), activeTier))
+      .filter((model) => isProviderAllowedForTier(model.provider, activeTier))
       .sort((left, right) => visionPriority.indexOf(left.provider) - visionPriority.indexOf(right.provider)
         || left.name.localeCompare(right.name))[0];
     if (!vision) {
@@ -5725,6 +5735,8 @@ async function respond() {
           : !imageGeneration
             ? [...models.values()]
               .filter((model) => canonicalProvider(model.provider) !== canonicalProvider(m.provider))
+              .filter((model) => isTierAvailable(modelTierCategory(model), activeTier))
+              .filter((model) => isProviderAllowedForTier(model.provider, activeTier))
               .filter((model) => (GATEWAY_FALLBACK_PRIORITY.includes(model.provider) && !isPaidModel(model))
                 || (isLocalProvider(model.provider) && isLocalProvider(m.provider)))
               .filter((model) => !isProviderCircuitOpen(model.provider))
