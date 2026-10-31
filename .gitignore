@@ -12,3 +12,6 @@ worker/.dev.vars.*
 *.keystore
 android/key.properties
 android/app/google-services.json
+
+._.git
+.release-gemini/
