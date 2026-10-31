@@ -12,6 +12,15 @@ Riwayat ini dipindahkan dari README lama dan dipertahankan sebagai arsip. Isi di
 - **Google Gemini:** chat, katalog, health check, dan fallback Gemini langsung dihapus. Hanya Gemini Live voice/video memakai secret Worker terpisah `GEMINI_LIVE_API_KEY`; model Gemini melalui OpenRouter tetap berjalan sebagai rute OpenRouter. Ganti secret lama `GEMINI_API_KEY` sebelum deploy agar Gemini Live tetap tersedia.
 
 ---
+
+## Perbaikan sign-in, terjemahan, dan pipeline gambar di v5.47 (30 Oktober 2026)
+
+- CSP Pages (`pages/_headers`) kini mengizinkan `https://apis.google.com` di `script-src` serta `https://accounts.google.com` di `frame-src` dan `img-src`. Sebelumnya SDK Firebase Auth memuat GIS `api.js` dan halaman akun Google yang diblokir CSP, sehingga login gagal dengan `auth/internal-error`; perubahan berlaku setelah deploy ulang Pages.
+- Kunci terjemahan `tierPickerTitle` ditambahkan untuk English, Bahasa Indonesia, dan Español; sebelumnya badge pemilih tier menampilkan key mentah `tierPickerTitle: FREE` di ketiga bahasa.
+- Antrean edit gambar (`IMAGE_EDIT_QUEUE` Durable Object, migrasi v4, cron per menit), modul skills dan memory, modul AI lokal, pembaruan UI web, rute gateway Pages, dan konfigurasi Android diperbarui.
+- Worker `myai-v3-free-api` dan situs Pages `myai-v3-firmansyah` disebarkan ulang dengan perubahan ini; CI GitHub hijau, audit browser pada situs live bersih (konsol tanpa error, guest chat end-to-end berhasil), dan situs terpasang sebagai PWA.
+
+---
 ## Pembaruan keamanan dan stabilitas di v3.6
 
 - Website dan jalur `/api` tersedia di Cloudflare Pages; gateway Pages meneruskan permintaan ke Worker tanpa mengekspos key provider.

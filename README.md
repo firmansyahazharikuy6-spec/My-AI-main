@@ -67,6 +67,10 @@ The model picker lists installed Ollama models after you connect from **Personal
 
    The Pages gateway is configured to proxy API requests to the Worker named in `pages/_worker.js`. Update that configuration if you deploy the Worker under a different name or hostname.
 
+   The Pages deployment ships `pages/_headers`, which sets the site's Content Security Policy. Google sign-in requires `https://apis.google.com` in `script-src` and `https://accounts.google.com` in `frame-src` and `img-src`; without those entries, Firebase sign-in fails in the browser with `auth/internal-error`. Re-deploy Pages after changing `_headers`.
+
+   Pushing to GitHub runs Actions CI (install, tests, and the web build); the run must pass before a commit is considered ready to deploy.
+
 ## Worker configuration and secrets
 
 At least one supported chat provider key is needed for AI chat. Add secrets from the repository root with `npm run worker:secret -- SECRET_NAME`; Wrangler prompts for the value.
@@ -91,4 +95,4 @@ Photo editing uses the `IMAGE_EDIT_QUEUE` Durable Object and the minute cron con
 
 ## Android and PWA
 
-The Capacitor Android wrapper, PWA offline shell, Google Play setup, release signing, device test plan, and Data Safety draft are documented in [Android release guide](./docs/android-release.md). Provider API keys remain on the Cloudflare Worker and must never be added to Android assets or app configuration.
+The Capacitor Android wrapper, PWA offline shell, Google Play setup, release signing, device test plan, and Data Safety draft are documented in [Android release guide](./docs/android-release.md). The production Pages site is installable as a PWA; its manifest, icons, and service worker ship with the build. Provider API keys remain on the Cloudflare Worker and must never be added to Android assets or app configuration.
